@@ -1,0 +1,24 @@
+{
+  "contract": "hraness.portfolio-inventory/v1",
+  "formatVersion": 1,
+  "repository": "hraness/posthog",
+  "components": [
+    {
+      "kind": "package",
+      "name": "@hraness/posthog",
+      "path": ".",
+      "visibility": "public",
+      "version": "0.1.0"
+    }
+  ],
+  "dependencies": [],
+  "deployments": [],
+  "brands": [],
+  "publications": [
+    {
+      "component": "@hraness/posthog",
+      "packageName": "@hraness/posthog",
+      "repository": "hraness/posthog"
+    }
+  ]
+}
