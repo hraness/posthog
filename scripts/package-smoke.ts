@@ -15,12 +15,12 @@ const specifiers = [
 ];
 const verifiedNextVersions = ["16.2.12", "16.3.0"] as const;
 const verificationPackages = [
-  "@types/node@^24.10.0",
-  "@types/react@^19.2.14",
-  "@types/react-dom@^19.2.3",
+  "@types/node@24.13.3",
+  "@types/react@19.2.18",
+  "@types/react-dom@19.2.4",
   "react@19.2.3",
   "react-dom@19.2.3",
-  "typescript@^6.0.3",
+  "typescript@6.0.3",
 ];
 
 const repository = process.cwd();
