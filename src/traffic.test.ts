@@ -61,3 +61,27 @@ test("recognizes privacy-safe search and AI UTM attribution without a referrer",
     traffic_source: "direct",
   });
 });
+
+test("checks exact www ownership before normalizing external taxonomy", () => {
+  const wwwOnlySite = {
+    ...site,
+    allowedHosts: ["www.example.com"],
+  } satisfies PostHogSiteDefinition;
+
+  expect(classifyAnalyticsTraffic(
+    wwwOnlySite,
+    "https://www.example.com/article",
+  )).toEqual({
+    traffic_channel: "internal",
+    traffic_source: "internal",
+    referrer_host: "www.example.com",
+  });
+  expect(classifyAnalyticsTraffic(
+    wwwOnlySite,
+    "https://example.com/article",
+  )).toEqual({
+    traffic_channel: "referral",
+    traffic_source: "example.com",
+    referrer_host: "example.com",
+  });
+});

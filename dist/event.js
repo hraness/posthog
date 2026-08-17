@@ -261,7 +261,7 @@ function sanitizeProviderProperties(site, properties) {
   return sanitized;
 }
 function redactSensitiveText(value) {
-  return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|secret|password)=([^\s&]+)/giu, "$1=[redacted]");
+  return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s?#]+)@/giu, "$1[credential]@").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|secret|password)=([^\s&]+)/giu, "$1=[redacted]");
 }
 function sanitizeAnalyticsError(value) {
   try {
@@ -306,12 +306,22 @@ class ExceptionBudget {
     this.#perFingerprintLimit = options.perFingerprintLimit;
     this.#windowMs = options.windowMs;
   }
+  get activeFingerprintCount() {
+    return this.#byFingerprint.size;
+  }
   allow(fingerprint, now = Date.now()) {
     const threshold = now - this.#windowMs;
     this.#all = this.#all.filter((timestamp) => timestamp > threshold);
-    const matching = (this.#byFingerprint.get(fingerprint) ?? []).filter((timestamp) => timestamp > threshold);
+    for (const [candidate, timestamps] of this.#byFingerprint) {
+      const active = timestamps.filter((timestamp) => timestamp > threshold);
+      if (active.length === 0) {
+        this.#byFingerprint.delete(candidate);
+      } else if (active.length !== timestamps.length) {
+        this.#byFingerprint.set(candidate, active);
+      }
+    }
+    const matching = this.#byFingerprint.get(fingerprint) ?? [];
     if (this.#all.length >= this.#totalLimit || matching.length >= this.#perFingerprintLimit) {
-      this.#byFingerprint.set(fingerprint, matching);
       return false;
     }
     this.#all.push(now);
@@ -320,38 +330,12 @@ class ExceptionBudget {
     return true;
   }
 }
-function readDelegatedAnalyticsEvent(site, target) {
-  if (!(target instanceof Element)) {
-    return null;
-  }
-  const element = target.closest("[data-analytics-event]");
-  const eventName = element?.dataset.analyticsEvent?.trim();
-  if (!element || !eventName || !isAllowedDelegatedEvent(site, eventName)) {
-    return null;
-  }
-  const properties = {};
-  if (element.dataset.analyticsKind) {
-    properties.target_kind = cleanPropertyString(element.dataset.analyticsKind);
-  }
-  if (element.dataset.analyticsId) {
-    properties.target_id = cleanPropertyString(element.dataset.analyticsId);
-  }
-  if (element instanceof HTMLAnchorElement) {
-    try {
-      const targetUrl = new URL(element.href, window.location.href);
-      properties.target_host = targetUrl.hostname.toLowerCase();
-      properties.target_path = normalizeAnalyticsPathname(targetUrl.pathname);
-    } catch {}
-  }
-  return { eventName, properties };
-}
 export {
   sanitizeProviderProperties,
   sanitizeAnalyticsError,
-  readDelegatedAnalyticsEvent,
   normalizeAnalyticsProperties,
   analyticsErrorFingerprint,
   ExceptionBudget
 };
 
-//# debugId=F2C6B16F336DF2C264756E2164756E21
+//# debugId=F4E9A6E7E7C1B04D64756E2164756E21

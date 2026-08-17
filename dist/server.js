@@ -208,7 +208,7 @@ function sanitizeProviderProperties(site, properties) {
   return sanitized;
 }
 function redactSensitiveText(value) {
-  return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|secret|password)=([^\s&]+)/giu, "$1=[redacted]");
+  return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s?#]+)@/giu, "$1[credential]@").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|secret|password)=([^\s&]+)/giu, "$1=[redacted]");
 }
 function sanitizeAnalyticsError(value) {
   try {
@@ -253,12 +253,22 @@ class ExceptionBudget {
     this.#perFingerprintLimit = options.perFingerprintLimit;
     this.#windowMs = options.windowMs;
   }
+  get activeFingerprintCount() {
+    return this.#byFingerprint.size;
+  }
   allow(fingerprint, now = Date.now()) {
     const threshold = now - this.#windowMs;
     this.#all = this.#all.filter((timestamp) => timestamp > threshold);
-    const matching = (this.#byFingerprint.get(fingerprint) ?? []).filter((timestamp) => timestamp > threshold);
+    for (const [candidate, timestamps] of this.#byFingerprint) {
+      const active = timestamps.filter((timestamp) => timestamp > threshold);
+      if (active.length === 0) {
+        this.#byFingerprint.delete(candidate);
+      } else if (active.length !== timestamps.length) {
+        this.#byFingerprint.set(candidate, active);
+      }
+    }
+    const matching = this.#byFingerprint.get(fingerprint) ?? [];
     if (this.#all.length >= this.#totalLimit || matching.length >= this.#perFingerprintLimit) {
-      this.#byFingerprint.set(fingerprint, matching);
       return false;
     }
     this.#all.push(now);
@@ -337,7 +347,7 @@ function parseReferrerHostname(referrer) {
     return null;
   }
   try {
-    return normalizeAnalyticsHostname(new URL(referrer).hostname).replace(/^www\./u, "");
+    return normalizeAnalyticsHostname(new URL(referrer).hostname);
   } catch {
     return "";
   }
@@ -381,34 +391,35 @@ function classifyAnalyticsTraffic(site, referrer, currentUrl) {
       referrer_host: hostname
     };
   }
-  const aiSource = sourceForHostname(hostname, AI_SOURCES);
+  const publicHostname = hostname.replace(/^www\./u, "");
+  const aiSource = sourceForHostname(publicHostname, AI_SOURCES);
   if (aiSource) {
     return {
       traffic_channel: "ai_referral",
       traffic_source: aiSource,
-      referrer_host: hostname
+      referrer_host: publicHostname
     };
   }
-  const searchSource = sourceForHostname(hostname, SEARCH_SOURCES);
+  const searchSource = sourceForHostname(publicHostname, SEARCH_SOURCES);
   if (searchSource) {
     return {
       traffic_channel: "organic_search",
       traffic_source: searchSource,
-      referrer_host: hostname
+      referrer_host: publicHostname
     };
   }
-  const socialSource = sourceForHostname(hostname, SOCIAL_SOURCES);
+  const socialSource = sourceForHostname(publicHostname, SOCIAL_SOURCES);
   if (socialSource) {
     return {
       traffic_channel: "social",
       traffic_source: socialSource,
-      referrer_host: hostname
+      referrer_host: publicHostname
     };
   }
   return {
     traffic_channel: "referral",
-    traffic_source: hostname,
-    referrer_host: hostname
+    traffic_source: publicHostname,
+    referrer_host: publicHostname
   };
 }
 
@@ -492,4 +503,4 @@ export {
   createPostHogRequestErrorReporter
 };
 
-//# debugId=21FBB10A099AB11B64756E2164756E21
+//# debugId=F71D78ADDEFB3AB364756E2164756E21

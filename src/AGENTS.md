@@ -3,7 +3,7 @@
 - `site.ts` normalizes hosts and paths, validates site-owned routes, and derives canonical route context.
 - `event.ts` normalizes event properties, sanitizes provider payloads, redacts sensitive values, and bounds exception capture.
 - `traffic.ts` classifies direct, internal, search, AI, social, and referral traffic from referrers and optional attribution.
-- `client.ts` configures eligible PostHog.js browser capture.
+- `client.ts` configures eligible PostHog.js browser capture and privacy-safe delegated DOM events.
 - `react.tsx` installs browser capture through small client components.
 - `server.ts` reports bounded request exceptions without affecting request behavior.
 - `next-config.ts` enables production-only source-map upload.

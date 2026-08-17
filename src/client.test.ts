@@ -4,6 +4,7 @@ import {
   createPostHogBeforeSend,
   createPostHogBrowserConfig,
   isPostHogBrowserEligible,
+  readDelegatedAnalyticsEvent,
 } from "./client";
 import { POSTHOG_SCHEMA_VERSION, type PostHogSiteDefinition } from "./site";
 
@@ -118,4 +119,95 @@ test("attributes ChatGPT UTM pageviews when the referrer is unavailable", () => 
   });
   expect(capture?.properties).not.toHaveProperty("$utm_source");
   expect(capture?.properties).not.toHaveProperty("utm_term");
+});
+
+test("delegated links collapse owned routes and omit foreign paths", () => {
+  const descriptors = new Map(
+    ["Element", "HTMLElement", "HTMLAnchorElement", "window"].map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(globalThis, key),
+    ]),
+  );
+  class FakeElement {
+    constructor(readonly matched: FakeHTMLElement | null = null) {}
+    closest(): FakeHTMLElement | null {
+      return this.matched;
+    }
+  }
+  class FakeHTMLElement extends FakeElement {
+    constructor(
+      readonly dataset: Record<string, string>,
+      matched: FakeHTMLElement | null = null,
+    ) {
+      super(matched);
+    }
+  }
+  class FakeAnchorElement extends FakeHTMLElement {
+    constructor(dataset: Record<string, string>, readonly href: string) {
+      super(dataset);
+    }
+  }
+  const setGlobal = (key: string, value: unknown): void => {
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      writable: true,
+      value,
+    });
+  };
+
+  try {
+    setGlobal("Element", FakeElement);
+    setGlobal("HTMLElement", FakeHTMLElement);
+    setGlobal("HTMLAnchorElement", FakeAnchorElement);
+    setGlobal("window", { location: { href: "https://example.com/" } });
+    const delegatedSite = {
+      ...site,
+      delegatedEvents: ["cta opened"],
+      unknownCanonicalPath: "/not-found",
+    } satisfies PostHogSiteDefinition;
+    const owned = new FakeAnchorElement(
+      {
+        analyticsEvent: "cta opened",
+        analyticsId: "  primary\u0000cta  ",
+        analyticsKind: "navigation",
+      },
+      "https://example.com/private/alice?token=secret",
+    );
+    const foreign = new FakeAnchorElement(
+      { analyticsEvent: "cta opened" },
+      "https://outside.example/private/alice?token=secret",
+    );
+
+    expect(readDelegatedAnalyticsEvent(
+      delegatedSite,
+      new FakeElement(owned) as unknown as EventTarget,
+    )).toEqual({
+      eventName: "cta opened",
+      properties: {
+        target_kind: "navigation",
+        target_id: "primary cta",
+        target_host: "example.com",
+        target_path: "/not-found",
+      },
+    });
+    expect(readDelegatedAnalyticsEvent(
+      delegatedSite,
+      new FakeElement(foreign) as unknown as EventTarget,
+    )).toEqual({
+      eventName: "cta opened",
+      properties: { target_host: "outside.example" },
+    });
+  } finally {
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) {
+        Object.defineProperty(globalThis, key, descriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, key);
+      }
+    }
+  }
+});
+
+test("delegated parsing is a no-op without a DOM", () => {
+  expect(readDelegatedAnalyticsEvent(site, null)).toBeNull();
 });
