@@ -1,0 +1,9 @@
+.github/
+scripts/
+src/**/*.test.ts
+AGENTS.md
+CONTRIBUTING.md
+SECURITY.md
+eslint.config.mjs
+portfolio-inventory.json
+tsconfig.json
