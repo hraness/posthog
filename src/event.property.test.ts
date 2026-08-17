@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import * as fc from "fast-check";
 
-import { sanitizeAnalyticsError, sanitizeProviderProperties } from "./event";
+import {
+  ExceptionBudget,
+  sanitizeAnalyticsError,
+  sanitizeProviderProperties,
+} from "./event";
 import { POSTHOG_SCHEMA_VERSION, type PostHogSiteDefinition } from "./site";
 
 const site = {
@@ -26,4 +30,38 @@ test("property: error sanitization is total over arbitrary values", () => {
   fc.assert(fc.property(fc.anything(), (value) => {
     expect(sanitizeAnalyticsError(value)).toBeInstanceOf(Error);
   }));
+});
+
+test("property: URI userinfo never survives error sanitization", () => {
+  const credentialPart = fc.stringMatching(/^[A-Za-z0-9:_-]{1,32}$/u);
+  fc.assert(fc.property(
+    fc.constantFrom("https", "redis", "postgresql", "mongodb+srv"),
+    credentialPart,
+    (scheme, userinfo) => {
+      const error = sanitizeAnalyticsError(
+        new Error(`Connect ${scheme}://${userinfo}@internal.example:6379/path`),
+      );
+      expect(error.message).toBe(
+        `Connect ${scheme}://[credential]@internal.example:6379/path`,
+      );
+    },
+  ));
+});
+
+test("property: expired exception fingerprints do not accumulate", () => {
+  fc.assert(fc.property(
+    fc.array(fc.string(), { minLength: 1, maxLength: 100 }),
+    (fingerprints) => {
+      const budget = new ExceptionBudget({
+        totalLimit: fingerprints.length,
+        perFingerprintLimit: fingerprints.length,
+        windowMs: 10,
+      });
+      for (const fingerprint of fingerprints) {
+        budget.allow(fingerprint, 0);
+      }
+      expect(budget.allow("current", 11)).toBe(true);
+      expect(budget.activeFingerprintCount).toBe(1);
+    },
+  ));
 });

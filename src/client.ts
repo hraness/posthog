@@ -1,25 +1,26 @@
 "use client";
 
-import posthog from "posthog-js";
+import { posthog } from "posthog-js";
 import type { CaptureResult, PostHogConfig } from "posthog-js";
 
 import {
   analyticsErrorFingerprint,
   ExceptionBudget,
   normalizeAnalyticsProperties,
-  readDelegatedAnalyticsEvent,
   sanitizeAnalyticsError,
   sanitizeProviderProperties,
   type AnalyticsProperties,
-} from "./event";
+} from "./event.js";
 import {
   canonicalAnalyticsUrl,
   classifyAnalyticsRoute,
   isAllowedAnalyticsHost,
   isAllowedCustomEvent,
+  isAllowedDelegatedEvent,
+  normalizeAnalyticsHostname,
   type PostHogSiteDefinition,
-} from "./site";
-import { classifyAnalyticsTraffic } from "./traffic";
+} from "./site.js";
+import { classifyAnalyticsTraffic } from "./traffic.js";
 
 const BUILT_IN_EVENTS = new Set(["$pageview", "$pageleave", "$web_vitals", "$exception"]);
 const DEFAULT_API_HOST = "https://us.i.posthog.com";
@@ -46,6 +47,61 @@ export type PostHogBrowserOptions = Readonly<{
   evidence?: BrowserAnalyticsEvidence;
 }>;
 
+export type DelegatedAnalyticsEvent = Readonly<{
+  eventName: string;
+  properties: AnalyticsProperties;
+}>;
+
+export function readDelegatedAnalyticsEvent(
+  site: PostHogSiteDefinition,
+  target: EventTarget | null,
+): DelegatedAnalyticsEvent | null {
+  if (typeof Element === "undefined" || !(target instanceof Element)) {
+    return null;
+  }
+  const element = target.closest("[data-analytics-event]");
+  if (typeof HTMLElement === "undefined" || !(element instanceof HTMLElement)) {
+    return null;
+  }
+  const eventName = element.dataset.analyticsEvent?.trim();
+  if (!eventName || !isAllowedDelegatedEvent(site, eventName)) {
+    return null;
+  }
+
+  const rawProperties: Record<string, unknown> = {
+    ...(element.dataset.analyticsKind
+      ? { target_kind: element.dataset.analyticsKind }
+      : {}),
+    ...(element.dataset.analyticsId
+      ? { target_id: element.dataset.analyticsId }
+      : {}),
+  };
+  if (typeof HTMLAnchorElement !== "undefined" && element instanceof HTMLAnchorElement) {
+    try {
+      const base = typeof window === "undefined"
+        ? `https://${site.canonicalDomain}`
+        : window.location.href;
+      const targetUrl = new URL(element.href, base);
+      if (targetUrl.protocol === "http:" || targetUrl.protocol === "https:") {
+        const targetHost = normalizeAnalyticsHostname(targetUrl.hostname);
+        rawProperties.target_host = targetHost;
+        if (isAllowedAnalyticsHost(site, targetHost)) {
+          const route = classifyAnalyticsRoute(site, targetUrl);
+          if (route) {
+            rawProperties.target_path = route.canonical_path;
+          }
+        }
+      }
+    } catch {
+      // A malformed href simply contributes no target properties.
+    }
+  }
+  return {
+    eventName,
+    properties: normalizeAnalyticsProperties(rawProperties),
+  };
+}
+
 function currentBrowserEvidence(): BrowserAnalyticsEvidence | null {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return null;
@@ -54,7 +110,8 @@ function currentBrowserEvidence(): BrowserAnalyticsEvidence | null {
     hostname: window.location.hostname,
     href: window.location.href,
     referrer: document.referrer,
-    production: process.env.NODE_ENV === "production",
+    production: typeof process !== "undefined"
+      && process.env["NODE_ENV"] === "production",
   };
 }
 

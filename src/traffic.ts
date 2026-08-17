@@ -2,7 +2,7 @@ import {
   isAllowedAnalyticsHost,
   normalizeAnalyticsHostname,
   type PostHogSiteDefinition,
-} from "./site";
+} from "./site.js";
 
 export type AnalyticsTrafficChannel =
   | "direct"
@@ -106,7 +106,7 @@ function parseReferrerHostname(referrer: string | null | undefined): string | nu
     return null;
   }
   try {
-    return normalizeAnalyticsHostname(new URL(referrer).hostname).replace(/^www\./u, "");
+    return normalizeAnalyticsHostname(new URL(referrer).hostname);
   } catch {
     return "";
   }
@@ -165,36 +165,38 @@ export function classifyAnalyticsTraffic(
     };
   }
 
-  const aiSource = sourceForHostname(hostname, AI_SOURCES);
+  const publicHostname = hostname.replace(/^www\./u, "");
+
+  const aiSource = sourceForHostname(publicHostname, AI_SOURCES);
   if (aiSource) {
     return {
       traffic_channel: "ai_referral",
       traffic_source: aiSource,
-      referrer_host: hostname,
+      referrer_host: publicHostname,
     };
   }
 
-  const searchSource = sourceForHostname(hostname, SEARCH_SOURCES);
+  const searchSource = sourceForHostname(publicHostname, SEARCH_SOURCES);
   if (searchSource) {
     return {
       traffic_channel: "organic_search",
       traffic_source: searchSource,
-      referrer_host: hostname,
+      referrer_host: publicHostname,
     };
   }
 
-  const socialSource = sourceForHostname(hostname, SOCIAL_SOURCES);
+  const socialSource = sourceForHostname(publicHostname, SOCIAL_SOURCES);
   if (socialSource) {
     return {
       traffic_channel: "social",
       traffic_source: socialSource,
-      referrer_host: hostname,
+      referrer_host: publicHostname,
     };
   }
 
   return {
     traffic_channel: "referral",
-    traffic_source: hostname,
-    referrer_host: hostname,
+    traffic_source: publicHostname,
+    referrer_host: publicHostname,
   };
 }

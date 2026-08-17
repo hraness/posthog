@@ -1,7 +1,7 @@
 "use client";
 
 // src/client.ts
-import posthog from "posthog-js";
+import { posthog } from "posthog-js";
 
 // src/site.ts
 var MAX_PATH_LENGTH = 512;
@@ -265,7 +265,7 @@ function sanitizeProviderProperties(site, properties) {
   return sanitized;
 }
 function redactSensitiveText(value) {
-  return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|secret|password)=([^\s&]+)/giu, "$1=[redacted]");
+  return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s?#]+)@/giu, "$1[credential]@").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|secret|password)=([^\s&]+)/giu, "$1=[redacted]");
 }
 function sanitizeAnalyticsError(value) {
   try {
@@ -310,12 +310,22 @@ class ExceptionBudget {
     this.#perFingerprintLimit = options.perFingerprintLimit;
     this.#windowMs = options.windowMs;
   }
+  get activeFingerprintCount() {
+    return this.#byFingerprint.size;
+  }
   allow(fingerprint, now = Date.now()) {
     const threshold = now - this.#windowMs;
     this.#all = this.#all.filter((timestamp) => timestamp > threshold);
-    const matching = (this.#byFingerprint.get(fingerprint) ?? []).filter((timestamp) => timestamp > threshold);
+    for (const [candidate, timestamps] of this.#byFingerprint) {
+      const active = timestamps.filter((timestamp) => timestamp > threshold);
+      if (active.length === 0) {
+        this.#byFingerprint.delete(candidate);
+      } else if (active.length !== timestamps.length) {
+        this.#byFingerprint.set(candidate, active);
+      }
+    }
+    const matching = this.#byFingerprint.get(fingerprint) ?? [];
     if (this.#all.length >= this.#totalLimit || matching.length >= this.#perFingerprintLimit) {
-      this.#byFingerprint.set(fingerprint, matching);
       return false;
     }
     this.#all.push(now);
@@ -323,31 +333,6 @@ class ExceptionBudget {
     this.#byFingerprint.set(fingerprint, matching);
     return true;
   }
-}
-function readDelegatedAnalyticsEvent(site, target) {
-  if (!(target instanceof Element)) {
-    return null;
-  }
-  const element = target.closest("[data-analytics-event]");
-  const eventName = element?.dataset.analyticsEvent?.trim();
-  if (!element || !eventName || !isAllowedDelegatedEvent(site, eventName)) {
-    return null;
-  }
-  const properties = {};
-  if (element.dataset.analyticsKind) {
-    properties.target_kind = cleanPropertyString(element.dataset.analyticsKind);
-  }
-  if (element.dataset.analyticsId) {
-    properties.target_id = cleanPropertyString(element.dataset.analyticsId);
-  }
-  if (element instanceof HTMLAnchorElement) {
-    try {
-      const targetUrl = new URL(element.href, window.location.href);
-      properties.target_host = targetUrl.hostname.toLowerCase();
-      properties.target_path = normalizeAnalyticsPathname(targetUrl.pathname);
-    } catch {}
-  }
-  return { eventName, properties };
 }
 
 // src/traffic.ts
@@ -419,7 +404,7 @@ function parseReferrerHostname(referrer) {
     return null;
   }
   try {
-    return normalizeAnalyticsHostname(new URL(referrer).hostname).replace(/^www\./u, "");
+    return normalizeAnalyticsHostname(new URL(referrer).hostname);
   } catch {
     return "";
   }
@@ -463,34 +448,35 @@ function classifyAnalyticsTraffic(site, referrer, currentUrl) {
       referrer_host: hostname
     };
   }
-  const aiSource = sourceForHostname(hostname, AI_SOURCES);
+  const publicHostname = hostname.replace(/^www\./u, "");
+  const aiSource = sourceForHostname(publicHostname, AI_SOURCES);
   if (aiSource) {
     return {
       traffic_channel: "ai_referral",
       traffic_source: aiSource,
-      referrer_host: hostname
+      referrer_host: publicHostname
     };
   }
-  const searchSource = sourceForHostname(hostname, SEARCH_SOURCES);
+  const searchSource = sourceForHostname(publicHostname, SEARCH_SOURCES);
   if (searchSource) {
     return {
       traffic_channel: "organic_search",
       traffic_source: searchSource,
-      referrer_host: hostname
+      referrer_host: publicHostname
     };
   }
-  const socialSource = sourceForHostname(hostname, SOCIAL_SOURCES);
+  const socialSource = sourceForHostname(publicHostname, SOCIAL_SOURCES);
   if (socialSource) {
     return {
       traffic_channel: "social",
       traffic_source: socialSource,
-      referrer_host: hostname
+      referrer_host: publicHostname
     };
   }
   return {
     traffic_channel: "referral",
-    traffic_source: hostname,
-    referrer_host: hostname
+    traffic_source: publicHostname,
+    referrer_host: publicHostname
   };
 }
 
@@ -505,6 +491,43 @@ var clientExceptionBudget = new ExceptionBudget({
 });
 var seenErrors = new WeakSet;
 var activeSiteId = null;
+function readDelegatedAnalyticsEvent(site, target) {
+  if (typeof Element === "undefined" || !(target instanceof Element)) {
+    return null;
+  }
+  const element = target.closest("[data-analytics-event]");
+  if (typeof HTMLElement === "undefined" || !(element instanceof HTMLElement)) {
+    return null;
+  }
+  const eventName = element.dataset.analyticsEvent?.trim();
+  if (!eventName || !isAllowedDelegatedEvent(site, eventName)) {
+    return null;
+  }
+  const rawProperties = {
+    ...element.dataset.analyticsKind ? { target_kind: element.dataset.analyticsKind } : {},
+    ...element.dataset.analyticsId ? { target_id: element.dataset.analyticsId } : {}
+  };
+  if (typeof HTMLAnchorElement !== "undefined" && element instanceof HTMLAnchorElement) {
+    try {
+      const base = typeof window === "undefined" ? `https://${site.canonicalDomain}` : window.location.href;
+      const targetUrl = new URL(element.href, base);
+      if (targetUrl.protocol === "http:" || targetUrl.protocol === "https:") {
+        const targetHost = normalizeAnalyticsHostname(targetUrl.hostname);
+        rawProperties.target_host = targetHost;
+        if (isAllowedAnalyticsHost(site, targetHost)) {
+          const route = classifyAnalyticsRoute(site, targetUrl);
+          if (route) {
+            rawProperties.target_path = route.canonical_path;
+          }
+        }
+      }
+    } catch {}
+  }
+  return {
+    eventName,
+    properties: normalizeAnalyticsProperties(rawProperties)
+  };
+}
 function currentBrowserEvidence() {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return null;
@@ -513,7 +536,7 @@ function currentBrowserEvidence() {
     hostname: window.location.hostname,
     href: window.location.href,
     referrer: document.referrer,
-    production: false
+    production: typeof process !== "undefined" && process.env["NODE_ENV"] === "production"
   };
 }
 function isPostHogBrowserEligible(options) {
@@ -679,6 +702,7 @@ function installDelegatedPostHogCapture(site) {
   };
 }
 export {
+  readDelegatedAnalyticsEvent,
   isPostHogBrowserEligible,
   installPostHogExceptionCapture,
   installDelegatedPostHogCapture,
@@ -689,4 +713,4 @@ export {
   capturePostHogEvent
 };
 
-//# debugId=4850788D72BA568164756E2164756E21
+//# debugId=28120A7D64B7EBF464756E2164756E21

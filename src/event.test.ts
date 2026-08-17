@@ -132,6 +132,29 @@ test("sanitizes errors and fingerprints equivalent failures", () => {
   expect(sanitizeAnalyticsError({ private: "value" }).message).toBe("Non-Error rejection");
 });
 
+test("redacts URI userinfo for every scheme and host class", () => {
+  const redis = sanitizeAnalyticsError(
+    new Error("Store failed at redis://:s3cr3t@cache:6379/0"),
+  );
+  const internalHttps = sanitizeAnalyticsError(
+    new Error("Fetch failed at https://alice:supersecret@127.0.0.1/path"),
+  );
+  const embeddedAt = sanitizeAnalyticsError(
+    new Error("Connect failed at postgres://user:p@ss@db.internal/app"),
+  );
+
+  expect(redis.message).toBe("Store failed at redis://[credential]@cache:6379/0");
+  expect(internalHttps.message).toBe(
+    "Fetch failed at https://[credential]@127.0.0.1/path",
+  );
+  expect(`${redis.message} ${internalHttps.message}`).not.toContain("s3cr3t");
+  expect(`${redis.message} ${internalHttps.message}`).not.toContain("supersecret");
+  expect(embeddedAt.message).toBe(
+    "Connect failed at postgres://[credential]@db.internal/app",
+  );
+  expect(embeddedAt.message).not.toContain("p@ss");
+});
+
 test("exception budget preserves first occurrences and bounds repeats", () => {
   const budget = new ExceptionBudget({ totalLimit: 3, perFingerprintLimit: 2, windowMs: 100 });
   expect(budget.allow("a", 0)).toBe(true);
@@ -140,4 +163,19 @@ test("exception budget preserves first occurrences and bounds repeats", () => {
   expect(budget.allow("b", 2)).toBe(true);
   expect(budget.allow("c", 2)).toBe(false);
   expect(budget.allow("a", 101)).toBe(true);
+});
+
+test("exception budget removes expired fingerprint buckets", () => {
+  const budget = new ExceptionBudget({
+    totalLimit: 100,
+    perFingerprintLimit: 1,
+    windowMs: 10,
+  });
+  for (let index = 0; index < 50; index += 1) {
+    expect(budget.allow(`expired-${String(index)}`, 0)).toBe(true);
+  }
+  expect(budget.activeFingerprintCount).toBe(50);
+
+  expect(budget.allow("current", 11)).toBe(true);
+  expect(budget.activeFingerprintCount).toBe(1);
 });

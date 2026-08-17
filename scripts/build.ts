@@ -4,6 +4,7 @@ type BuildGroup = Readonly<{
   entrypoints: readonly string[];
   target: "browser" | "node";
   banner?: string;
+  external?: readonly string[];
 }>;
 
 const groups: readonly BuildGroup[] = [
@@ -12,9 +13,15 @@ const groups: readonly BuildGroup[] = [
     target: "browser",
   },
   {
-    entrypoints: ["src/client.ts", "src/react.tsx"],
+    entrypoints: ["src/client.ts"],
     target: "browser",
     banner: '"use client";',
+  },
+  {
+    entrypoints: ["src/react.tsx"],
+    target: "browser",
+    banner: '"use client";',
+    external: ["./client*"],
   },
   {
     entrypoints: ["src/server.ts", "src/next-config.ts"],
@@ -34,6 +41,7 @@ for (const group of groups) {
     sourcemap: "external",
     minify: false,
     ...(group.banner ? { banner: group.banner } : {}),
+    ...(group.external ? { external: [...group.external] } : {}),
   });
   if (!result.success) {
     for (const log of result.logs) {

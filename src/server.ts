@@ -6,14 +6,14 @@ import {
   ExceptionBudget,
   sanitizeAnalyticsError,
   sanitizeProviderProperties,
-} from "./event";
+} from "./event.js";
 import {
   classifyAnalyticsRoute,
   isAllowedAnalyticsHost,
   normalizeAnalyticsHostname,
   type PostHogSiteDefinition,
-} from "./site";
-import { classifyAnalyticsTraffic } from "./traffic";
+} from "./site.js";
+import { classifyAnalyticsTraffic } from "./traffic.js";
 
 const DEFAULT_API_HOST = "https://us.i.posthog.com";
 const serverExceptionBudget = new ExceptionBudget({

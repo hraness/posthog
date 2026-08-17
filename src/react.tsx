@@ -9,8 +9,8 @@ import {
   installDelegatedPostHogCapture,
   installPostHogExceptionCapture,
   type PostHogBrowserOptions,
-} from "./client";
-import type { PostHogSiteDefinition } from "./site";
+} from "./client.js";
+import type { PostHogSiteDefinition } from "./site.js";
 
 export type PostHogAnalyticsProps = Readonly<{
   site: PostHogSiteDefinition;
