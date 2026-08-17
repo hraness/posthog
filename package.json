@@ -78,13 +78,14 @@
     "kb:catalog": "bunx --bun github:hraness/kb#v0.15.1 catalog --root kb",
     "build": "bun run ./scripts/build.ts",
     "check:boundaries": "bun run ./scripts/check-bundle-boundaries.ts",
+    "check:portfolio-inventory": "bun run ./scripts/check-portfolio-inventory.ts",
     "check:public-boundary": "bun run ./scripts/check-public-boundary.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./src",
     "test:property": "bun test ./src/*.property.test.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "check": "bun run check:public-boundary && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package && bun run kb:check",
+    "check": "bun run check:portfolio-inventory && bun run check:public-boundary && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package && bun run kb:check",
     "prepack": "bun run check"
   },
   "dependencies": {

@@ -7,6 +7,7 @@
 - `src/next-config.ts` owns production-only source-map configuration.
 - `src/*.test.ts` and `src/*.property.test.ts` hold deterministic regressions and general laws.
 - `scripts/` builds isolated exports and verifies package, bundle, and public boundaries.
+- `portfolio-inventory.json` records the package publication boundary in the shared fleet contract.
 - `.github/workflows/` runs read-only continuous integration and publishes only a verified immutable release.
 - `.agents/skills/` contains the seven portable knowledge and phased-execution workflows.
 - `kb/` contains authored repository rationale, maintained synthesis, and implementation plans.
@@ -25,6 +26,7 @@
 - Treat source-map credentials as build-time secrets. Upload only for an exact production deployment with a supported PostHog UI host and a commit release identifier.
 - Keep Direct deterministic compositions development-only and outside every production dependency graph and published export.
 - Freeze package interfaces before parallel lanes begin. Give exports, manifests, lockfiles, generated output, and other convergence surfaces one owner while lanes edit disjoint paths.
+- Keep `portfolio-inventory.json` generated from `package.json`; the checked inventory must match the public package name, version, repository, and Hraness dependency edges exactly.
 - Keep mandatory rules in the closest `AGENTS.md`, executable contracts in types and tests, and pull-based rationale, evidence, synthesis, and plans in `kb/`.
 - Use Bun 1.3.14 for installs, builds, and tests. Verify every installed export with genuine Node 24.
 - Run `bun run check` before release handoff. The release workflow may write only the verified immutable GitHub Release.
