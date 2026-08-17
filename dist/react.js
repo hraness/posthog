@@ -1,5 +1,9 @@
+"use client";
+
+// src/client.ts
+import posthog from "posthog-js";
+
 // src/site.ts
-var POSTHOG_SCHEMA_VERSION = 1;
 var MAX_PATH_LENGTH = 512;
 var MAX_SLUG_LENGTH = 160;
 function normalizeAnalyticsHostname(hostname) {
@@ -491,7 +495,6 @@ function classifyAnalyticsTraffic(site, referrer, currentUrl) {
 }
 
 // src/client.ts
-import posthog from "posthog-js";
 "use client";
 var BUILT_IN_EVENTS = new Set(["$pageview", "$pageleave", "$web_vitals", "$exception"]);
 var DEFAULT_API_HOST = "https://us.i.posthog.com";
@@ -727,4 +730,4 @@ export {
   PostHogAnalytics
 };
 
-//# debugId=D54DE130A89E6B2464756E2164756E21
+//# debugId=80E5A31D0152DDD664756E2164756E21

@@ -31,6 +31,13 @@ for (const entry of browserEntries) {
   }
 }
 
+for (const entry of ["client", "react"]) {
+  const source = await readFile(`dist/${entry}.js`, "utf8");
+  if (!source.startsWith('"use client";')) {
+    throw new Error(`${entry} does not preserve its Next.js client boundary`);
+  }
+}
+
 const pureEntries = ["site", "event", "traffic"];
 for (const entry of pureEntries) {
   const source = await readFile(`dist/${entry}.js`, "utf8");
