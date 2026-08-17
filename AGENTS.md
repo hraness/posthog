@@ -28,5 +28,5 @@
 - Freeze package interfaces before parallel lanes begin. Give exports, manifests, lockfiles, generated output, and other convergence surfaces one owner while lanes edit disjoint paths.
 - Keep `portfolio-inventory.json` generated from `package.json`; the checked inventory must match the public package name, version, repository, and Hraness dependency edges exactly.
 - Keep mandatory rules in the closest `AGENTS.md`, executable contracts in types and tests, and pull-based rationale, evidence, synthesis, and plans in `kb/`.
-- Use Bun 1.3.14 for installs, builds, and tests. Verify every installed export with genuine Node 24.
+- Use Bun 1.3.14 for installs, builds, and tests. Verify every installed export with genuine Node 24, including the `./next-config` fallback used by supported Next.js TypeScript config loaders.
 - Run `bun run check` before release handoff. The release workflow may write only the verified immutable GitHub Release.

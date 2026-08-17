@@ -1,6 +1,6 @@
 {
   "name": "@hraness/posthog",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Privacy-preserving PostHog analytics primitives for modern web applications.",
   "license": "MIT",
   "type": "module",
@@ -26,35 +26,43 @@
   "exports": {
     ".": {
       "types": "./src/site.ts",
-      "import": "./dist/site.js"
+      "import": "./dist/site.js",
+      "default": "./dist/site.js"
     },
     "./site": {
       "types": "./src/site.ts",
-      "import": "./dist/site.js"
+      "import": "./dist/site.js",
+      "default": "./dist/site.js"
     },
     "./client": {
       "types": "./src/client.ts",
-      "import": "./dist/client.js"
+      "import": "./dist/client.js",
+      "default": "./dist/client.js"
     },
     "./event": {
       "types": "./src/event.ts",
-      "import": "./dist/event.js"
+      "import": "./dist/event.js",
+      "default": "./dist/event.js"
     },
     "./next-config": {
       "types": "./src/next-config.ts",
-      "import": "./dist/next-config.js"
+      "import": "./dist/next-config.js",
+      "default": "./dist/next-config.js"
     },
     "./react": {
       "types": "./src/react.tsx",
-      "import": "./dist/react.js"
+      "import": "./dist/react.js",
+      "default": "./dist/react.js"
     },
     "./server": {
       "types": "./src/server.ts",
-      "import": "./dist/server.js"
+      "import": "./dist/server.js",
+      "default": "./dist/server.js"
     },
     "./traffic": {
       "types": "./src/traffic.ts",
-      "import": "./dist/traffic.js"
+      "import": "./dist/traffic.js",
+      "default": "./dist/traffic.js"
     }
   },
   "main": "./dist/site.js",
