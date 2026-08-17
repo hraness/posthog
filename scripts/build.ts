@@ -1,29 +1,44 @@
 import { rm } from "node:fs/promises";
 
-const entrypoints = [
-  "src/site.ts",
-  "src/event.ts",
-  "src/traffic.ts",
-  "src/client.ts",
-  "src/react.tsx",
-  "src/server.ts",
-  "src/next-config.ts",
+type BuildGroup = Readonly<{
+  entrypoints: readonly string[];
+  target: "browser" | "node";
+  banner?: string;
+}>;
+
+const groups: readonly BuildGroup[] = [
+  {
+    entrypoints: ["src/site.ts", "src/event.ts", "src/traffic.ts"],
+    target: "browser",
+  },
+  {
+    entrypoints: ["src/client.ts", "src/react.tsx"],
+    target: "browser",
+    banner: '"use client";',
+  },
+  {
+    entrypoints: ["src/server.ts", "src/next-config.ts"],
+    target: "node",
+  },
 ];
 
 await rm("dist", { recursive: true, force: true });
-const result = await Bun.build({
-  entrypoints,
-  outdir: "dist",
-  root: "src",
-  target: "browser",
-  format: "esm",
-  packages: "external",
-  sourcemap: "external",
-  minify: false,
-});
-if (!result.success) {
-  for (const log of result.logs) {
-    console.error(log);
+for (const group of groups) {
+  const result = await Bun.build({
+    entrypoints: [...group.entrypoints],
+    outdir: "dist",
+    root: "src",
+    target: group.target,
+    format: "esm",
+    packages: "external",
+    sourcemap: "external",
+    minify: false,
+    ...(group.banner ? { banner: group.banner } : {}),
+  });
+  if (!result.success) {
+    for (const log of result.logs) {
+      console.error(log);
+    }
+    process.exit(1);
   }
-  process.exit(1);
 }

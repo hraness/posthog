@@ -1,5 +1,7 @@
+// src/server.ts
+import { PostHog } from "posthog-node";
+
 // src/site.ts
-var POSTHOG_SCHEMA_VERSION = 1;
 var MAX_PATH_LENGTH = 512;
 var MAX_SLUG_LENGTH = 160;
 function normalizeAnalyticsHostname(hostname) {
@@ -74,18 +76,8 @@ function classifyAnalyticsRoute(site, location) {
 function canonicalAnalyticsUrl(site, pathname) {
   return `https://${normalizeAnalyticsHostname(site.canonicalDomain)}${normalizeAnalyticsPathname(pathname)}`;
 }
-function isAllowedCustomEvent(site, eventName) {
-  return site.customEvents.includes(eventName);
-}
-function isAllowedDelegatedEvent(site, eventName) {
-  return site.delegatedEvents?.includes(eventName) ?? false;
-}
 
 // src/event.ts
-var MAX_PROPERTY_COUNT = 32;
-var MAX_PROPERTY_KEY_LENGTH = 64;
-var MAX_PROPERTY_STRING_LENGTH = 256;
-var MAX_PROPERTY_ARRAY_LENGTH = 20;
 var MAX_ERROR_MESSAGE_LENGTH = 512;
 var MAX_ERROR_STACK_LENGTH = 6000;
 var MAX_PROVIDER_PROPERTY_STRING_LENGTH = 2048;
@@ -138,51 +130,6 @@ function isProviderPathnameKey(key) {
 }
 function isQueryAttributionKey(key) {
   return QUERY_ATTRIBUTION_PROPERTY_NAMES.has(normalizedProviderPropertyName(key));
-}
-function cleanPropertyString(value) {
-  return Array.from(value, (character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint < 32 || codePoint === 127 ? " " : character;
-  }).join("").replace(/\s{2,}/gu, " ").trim().slice(0, MAX_PROPERTY_STRING_LENGTH);
-}
-function normalizePrimitive(value) {
-  if (value === null || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === "string") {
-    return cleanPropertyString(value);
-  }
-  return;
-}
-function normalizePropertyValue(value) {
-  const primitive = normalizePrimitive(value);
-  if (primitive !== undefined) {
-    return primitive;
-  }
-  if (!Array.isArray(value)) {
-    return;
-  }
-  const normalized = value.slice(0, MAX_PROPERTY_ARRAY_LENGTH).map(normalizePrimitive).filter((item) => item !== undefined);
-  return normalized;
-}
-function normalizeAnalyticsProperties(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  const normalized = {};
-  for (const [key, propertyValue] of Object.entries(value).slice(0, MAX_PROPERTY_COUNT)) {
-    if (!/^[a-z][a-z0-9_]*$/u.test(key) || key.length > MAX_PROPERTY_KEY_LENGTH) {
-      continue;
-    }
-    const safeValue = normalizePropertyValue(propertyValue);
-    if (safeValue !== undefined) {
-      normalized[key] = safeValue;
-    }
-  }
-  return normalized;
 }
 function sanitizeThirdPartyUrl(value, originOnly) {
   try {
@@ -319,31 +266,6 @@ class ExceptionBudget {
     this.#byFingerprint.set(fingerprint, matching);
     return true;
   }
-}
-function readDelegatedAnalyticsEvent(site, target) {
-  if (!(target instanceof Element)) {
-    return null;
-  }
-  const element = target.closest("[data-analytics-event]");
-  const eventName = element?.dataset.analyticsEvent?.trim();
-  if (!element || !eventName || !isAllowedDelegatedEvent(site, eventName)) {
-    return null;
-  }
-  const properties = {};
-  if (element.dataset.analyticsKind) {
-    properties.target_kind = cleanPropertyString(element.dataset.analyticsKind);
-  }
-  if (element.dataset.analyticsId) {
-    properties.target_id = cleanPropertyString(element.dataset.analyticsId);
-  }
-  if (element instanceof HTMLAnchorElement) {
-    try {
-      const targetUrl = new URL(element.href, window.location.href);
-      properties.target_host = targetUrl.hostname.toLowerCase();
-      properties.target_path = normalizeAnalyticsPathname(targetUrl.pathname);
-    } catch {}
-  }
-  return { eventName, properties };
 }
 
 // src/traffic.ts
@@ -491,7 +413,6 @@ function classifyAnalyticsTraffic(site, referrer, currentUrl) {
 }
 
 // src/server.ts
-import { PostHog } from "posthog-node";
 var DEFAULT_API_HOST = "https://us.i.posthog.com";
 var serverExceptionBudget = new ExceptionBudget({
   totalLimit: 30,
@@ -571,4 +492,4 @@ export {
   createPostHogRequestErrorReporter
 };
 
-//# debugId=208AB5842B8C066364756E2164756E21
+//# debugId=21FBB10A099AB11B64756E2164756E21
