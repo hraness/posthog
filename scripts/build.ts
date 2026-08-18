@@ -1,5 +1,9 @@
 import { rm } from "node:fs/promises";
 
+// Bun can retain source directives after bundled imports. Emit this boundary
+// only as a banner so each published client entry has one valid prologue.
+const CLIENT_DIRECTIVE = '"use client";';
+
 type BuildGroup = Readonly<{
   entrypoints: readonly string[];
   target: "browser" | "node";
@@ -15,12 +19,12 @@ const groups: readonly BuildGroup[] = [
   {
     entrypoints: ["src/client.ts"],
     target: "browser",
-    banner: '"use client";',
+    banner: CLIENT_DIRECTIVE,
   },
   {
     entrypoints: ["src/react.tsx"],
     target: "browser",
-    banner: '"use client";',
+    banner: CLIENT_DIRECTIVE,
     external: ["./client*"],
   },
   {

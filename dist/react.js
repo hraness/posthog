@@ -9,7 +9,6 @@ import {
   installDelegatedPostHogCapture,
   installPostHogExceptionCapture
 } from "./client.js";
-"use client";
 function initialize(props) {
   return initializePostHogBrowser({
     site: props.site,
@@ -58,4 +57,4 @@ export {
   PostHogAnalytics
 };
 
-//# debugId=D3B58E2F629890F264756E2164756E21
+//# debugId=CD53137435EEFC5D64756E2164756E21

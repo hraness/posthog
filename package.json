@@ -1,6 +1,6 @@
 {
   "name": "@hraness/posthog",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Privacy-preserving PostHog analytics primitives for modern web applications.",
   "license": "MIT",
   "type": "module",
