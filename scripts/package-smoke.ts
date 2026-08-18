@@ -13,7 +13,7 @@ const specifiers = [
   `${packageName}/server`,
   `${packageName}/traffic`,
 ];
-const verifiedNextVersions = ["16.2.12", "16.3.0"] as const;
+const verifiedNextVersions = ["16.2.12", "16.3.1"] as const;
 const verificationPackages = [
   "@types/node@24.13.3",
   "@types/react@19.2.18",
@@ -34,6 +34,16 @@ const environment = {
   NEXT_TELEMETRY_DISABLED: "1",
   TMPDIR: temporary,
 };
+const clientDirective = /(["'])use client\1\s*;/gu;
+
+function assertClientBoundary(label: string, source: string): void {
+  if (!source.startsWith('"use client";\n')) {
+    throw new Error(`${label} does not start with its Next.js client boundary`);
+  }
+  if ([...source.matchAll(clientDirective)].length !== 1) {
+    throw new Error(`${label} must contain exactly one Next.js client boundary`);
+  }
+}
 
 async function run(
   command: string[],
@@ -94,6 +104,11 @@ try {
   await mkdir(temporary, { mode: 0o700 });
   const nodeExecutable = resolveGenuineNodeExecutable();
 
+  for (const entry of ["client", "react"]) {
+    const source = await Bun.file(join(repository, "dist", `${entry}.js`)).text();
+    assertClientBoundary(`dist/${entry}.js`, source);
+  }
+
   await run([
     process.execPath,
     "pm",
@@ -151,6 +166,10 @@ try {
     );
     if (await Bun.file(join(installedRoot, "src", "client.test.ts")).exists()) {
       throw new Error("installed package must not contain source tests");
+    }
+    for (const entry of ["client", "react"]) {
+      const source = await Bun.file(join(installedRoot, "dist", `${entry}.js`)).text();
+      assertClientBoundary(`packed dist/${entry}.js for Next ${nextVersion}`, source);
     }
 
     await writeFile(join(consumer, "runtime-smoke.mjs"), `
@@ -253,14 +272,41 @@ if (!reactSource.includes('from "./client.js"') || reactSource.includes("activeS
         "",
       ].join("\n"),
     );
-    await writeFile(
-      join(consumer, "app", "layout.js"),
-      "export default function Layout({ children }) { return <html><body>{children}</body></html>; }\n",
-    );
-    await writeFile(
-      join(consumer, "app", "page.js"),
-      "export default function Page() { return <main>PostHog package smoke</main>; }\n",
-    );
+    await writeFile(join(consumer, "app", "analytics.js"), [
+      '"use client";',
+      "",
+      'import { isPostHogBrowserEligible } from "@hraness/posthog/client";',
+      'import { PostHogAnalytics } from "@hraness/posthog/react";',
+      "",
+      "const site = {",
+      '  id: "package-smoke",',
+      '  canonicalDomain: "example.com",',
+      '  allowedHosts: ["example.com"],',
+      "  schemaVersion: 1,",
+      '  routes: [{ match: "exact", path: "/", pageKind: "home" }],',
+      "  customEvents: [],",
+      "};",
+      "",
+      "export function Analytics() {",
+      '  void isPostHogBrowserEligible({ site, apiKey: "phc_public" });',
+      '  return <PostHogAnalytics site={site} apiKey="phc_public" />;',
+      "}",
+      "",
+    ].join("\n"));
+    await writeFile(join(consumer, "app", "layout.js"), [
+      "export default function Layout({ children }) {",
+      "  return <html><body>{children}</body></html>;",
+      "}",
+      "",
+    ].join("\n"));
+    await writeFile(join(consumer, "app", "page.js"), [
+      'import { Analytics } from "./analytics";',
+      "",
+      "export default function Page() {",
+      "  return <main><Analytics />PostHog package smoke</main>;",
+      "}",
+      "",
+    ].join("\n"));
     await run([
       nodeExecutable,
       join(consumer, "node_modules", "next", "dist", "bin", "next"),

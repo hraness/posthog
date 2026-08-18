@@ -481,7 +481,6 @@ function classifyAnalyticsTraffic(site, referrer, currentUrl) {
 }
 
 // src/client.ts
-"use client";
 var BUILT_IN_EVENTS = new Set(["$pageview", "$pageleave", "$web_vitals", "$exception"]);
 var DEFAULT_API_HOST = "https://us.i.posthog.com";
 var clientExceptionBudget = new ExceptionBudget({
@@ -713,4 +712,4 @@ export {
   capturePostHogEvent
 };
 
-//# debugId=28120A7D64B7EBF464756E2164756E21
+//# debugId=506097B8E608C77964756E2164756E21

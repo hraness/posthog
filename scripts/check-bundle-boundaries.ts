@@ -11,6 +11,17 @@ const allowedImports = new Map<string, ReadonlySet<string>>([
 ]);
 
 const staticImport = /(?:from\s+|import\s*)["']([^"']+)["']/gu;
+const clientDirective = /(["'])use client\1\s*;/gu;
+
+function assertClientBoundary(entry: string, source: string): void {
+  if (!source.startsWith('"use client";\n')) {
+    throw new Error(`${entry} does not start with its Next.js client boundary`);
+  }
+  if ([...source.matchAll(clientDirective)].length !== 1) {
+    throw new Error(`${entry} must contain exactly one Next.js client boundary`);
+  }
+}
+
 for (const [entry, allowed] of allowedImports) {
   const source = await readFile(`dist/${entry}.js`, "utf8");
   const imports = [...source.matchAll(staticImport)].map((match) => match[1]);
@@ -33,9 +44,7 @@ for (const entry of browserEntries) {
 
 for (const entry of ["client", "react"]) {
   const source = await readFile(`dist/${entry}.js`, "utf8");
-  if (!source.startsWith('"use client";')) {
-    throw new Error(`${entry} does not preserve its Next.js client boundary`);
-  }
+  assertClientBoundary(entry, source);
 }
 
 const clientSource = await readFile("dist/client.js", "utf8");

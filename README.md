@@ -11,7 +11,7 @@ Pin the immutable GitHub release and install the framework peers used by your ap
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "github:hraness/posthog#v0.1.1",
+    "@hraness/posthog": "github:hraness/posthog#v0.1.2",
     "next": "16.2.12",
     "react": "19.2.3"
   }
