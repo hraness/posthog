@@ -80,10 +80,10 @@
     "README.md"
   ],
   "scripts": {
-    "kb:refresh": "bunx --bun github:hraness/kb#v0.15.1 refresh --root kb",
-    "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.1 check --root kb --no-catalog",
-    "kb:check": "bunx --bun github:hraness/kb#v0.15.1 check --root kb && bunx --bun github:hraness/kb#v0.15.1 agents check --root kb --repo .",
-    "kb:catalog": "bunx --bun github:hraness/kb#v0.15.1 catalog --root kb",
+    "kb:refresh": "bunx --bun github:hraness/kb#v0.15.2 refresh --root kb",
+    "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.2 check --root kb --no-catalog",
+    "kb:check": "bunx --bun github:hraness/kb#v0.15.2 check --root kb && bunx --bun github:hraness/kb#v0.15.2 agents check --root kb --repo .",
+    "kb:catalog": "bunx --bun github:hraness/kb#v0.15.2 catalog --root kb",
     "build": "bun run ./scripts/build.ts",
     "check:boundaries": "bun run ./scripts/check-bundle-boundaries.ts",
     "check:portfolio-inventory": "bun run ./scripts/check-portfolio-inventory.ts",
