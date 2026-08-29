@@ -9,7 +9,7 @@
 - `scripts/` builds isolated exports and verifies package, bundle, and public boundaries.
 - `portfolio-inventory.json` records the package publication boundary in the shared fleet contract.
 - `.github/workflows/` runs read-only continuous integration and publishes only a verified immutable release.
-- `.agents/skills/` contains the seven portable knowledge and phased-execution workflows.
+- `.agents/skills/` contains the portable knowledge workflows and five-skill phased-execution pack.
 - `kb/` contains authored repository rationale, maintained synthesis, and implementation plans.
 - `WRITING.md` and `STYLE.md` define the internal and public prose contracts.
 
