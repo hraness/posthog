@@ -6,7 +6,7 @@
 - `src/server.ts` owns bounded server exception reporting through PostHog Node.
 - `src/next-config.ts` owns production-only source-map configuration.
 - `src/*.test.ts` and `src/*.property.test.ts` hold deterministic regressions and general laws.
-- `scripts/` builds isolated exports and verifies package, bundle, and public boundaries.
+- `scripts/` builds isolated exports and verifies package, product-documentation, bundle, and public boundaries.
 - `portfolio-inventory.json` records the package publication boundary in the shared fleet contract.
 - `.github/workflows/` runs read-only continuous integration and publishes only a verified immutable release.
 - `.agents/skills/` contains the portable knowledge workflows and five-skill phased-execution pack.

@@ -1,7 +1,7 @@
 {
   "name": "@hraness/posthog",
   "version": "0.1.2",
-  "description": "Privacy-preserving PostHog analytics primitives for modern web applications.",
+  "description": "Privacy-bounded PostHog routing, capture, and source-map primitives for Next.js applications.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -19,9 +19,11 @@
   },
   "keywords": [
     "analytics",
+    "cookieless",
     "nextjs",
     "posthog",
-    "privacy"
+    "privacy",
+    "source-maps"
   ],
   "exports": {
     ".": {
@@ -87,13 +89,14 @@
     "build": "bun run ./scripts/build.ts",
     "check:boundaries": "bun run ./scripts/check-bundle-boundaries.ts",
     "check:portfolio-inventory": "bun run ./scripts/check-portfolio-inventory.ts",
+    "check:product-contract": "bun run ./scripts/check-product-contract.ts",
     "check:public-boundary": "bun run ./scripts/check-public-boundary.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./src",
     "test:property": "bun test ./src/*.property.test.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "check": "bun run check:portfolio-inventory && bun run check:public-boundary && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package && bun run kb:check",
+    "check": "bun run check:portfolio-inventory && bun run check:product-contract && bun run check:public-boundary && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package && bun run kb:check",
     "prepack": "bun run check"
   },
   "dependencies": {
