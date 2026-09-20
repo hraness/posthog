@@ -82,6 +82,8 @@
     "README.md"
   ],
   "scripts": {
+    "kb:search": "bunx --bun --package https://github.com/hraness/wordcell/releases/download/v0.22.0/hraness-wordcell-0.22.0.tgz wordcell search --root kb --mode exact --rerank typesafe --rerank-limit 25",
+    "kb:search:local": "bunx --bun --package https://github.com/hraness/wordcell/releases/download/v0.22.0/hraness-wordcell-0.22.0.tgz wordcell search --root kb --mode exact",
     "kb:refresh": "bunx --bun github:hraness/kb#v0.15.2 refresh --root kb",
     "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.2 check --root kb --no-catalog",
     "kb:check": "bunx --bun github:hraness/kb#v0.15.2 check --root kb && bunx --bun github:hraness/kb#v0.15.2 agents check --root kb --repo .",
