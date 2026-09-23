@@ -7,19 +7,21 @@
 
 ## Collect only the analytics your site defines
 
-`@hraness/posthog` gives a Next.js application one typed site definition for route context, event
-allowlists, traffic attribution, browser capture, bounded exception reporting, and production
-source maps. The pure route, event, and traffic exports do not import a provider SDK. Browser,
-server, React, and build-time adapters stay behind separate entry points.
+`@hraness/posthog` connects a Next.js app to PostHog from one site definition that lists your hosts,
+routes, and allowed events. The browser adapter captures only declared events on approved
+production hosts, keeps its state in memory instead of cookies, strips URL queries, and redacts
+recognized credentials and email addresses. Separate adapters report server errors, with limits on
+repeats, and upload source maps for production builds. The route, event, and traffic helpers run
+without importing PostHog.
 
-The application owns the hosts, routes, events, conversion meaning, PostHog project, and policy for
-when analytics may run. The package validates those inputs, removes or bounds sensitive provider
-properties, and keeps invalid capture paths inert.
+Your app still decides its hosts, routes, events, what counts as a conversion, the PostHog project,
+and when analytics may run. The package validates those inputs, strips or limits sensitive
+properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> **Distribution boundary:** Install version 0.1.2 from its immutable GitHub release tag. This
-> repository publishes a verified GitHub Release and does not publish the package to npm.
+> This repository does not publish the package to npm. Install version 0.1.2 from its GitHub
+> release tag, as shown below.
 
-## Smallest useful action
+## Quick start
 
 Pin the Git source release with framework versions inside the supported peer ranges:
 
@@ -92,9 +94,9 @@ console.log(
 }
 ```
 
-This proof imports no PostHog runtime, writes no cookie, and sends no event.
+The route check above loads no PostHog code, writes no cookie, and sends nothing.
 
-## Choose the integration boundary
+## Choose an entry point
 
 | Import | Runtime | Use it for | Observable result |
 | --- | --- | --- | --- |
@@ -109,7 +111,7 @@ This proof imports no PostHog runtime, writes no cookie, and sends no event.
 Keep each import on its intended side of the application boundary. The root export is pure. Import
 browser, React, server, and build-time adapters only where those runtimes exist.
 
-## Operator and package responsibilities
+## What you decide and what the package enforces
 
 | The site owner decides | The package enforces |
 | --- | --- |
@@ -246,7 +248,7 @@ The adapter returns the original Next.js config unless every requirement is pres
 Uploaded source maps use the site ID and commit SHA as release identity, then delete the generated
 artifacts. Keep the personal token out of browser bundles, fixtures, logs, and repository files.
 
-## Implement without widening the boundary
+## Integration checklist
 
 1. Define one `PostHogSiteDefinition` in the consuming application.
 2. Prove its route classifications with the pure root export.
@@ -285,7 +287,7 @@ boundaries after the application decides analytics may run.
 
 The package accepts Next.js 16.2 through the 16.x line. Its package smoke test installs the packed
 artifact into real Next.js 16.2.12 and 16.3.1 TypeScript-config consumers, then imports every public
-entry point with genuine Node 24.
+entry point with Node.js 24 itself (not Bun).
 
 ## Reference
 
@@ -299,7 +301,7 @@ entry point with genuine Node 24.
 
 ## Development
 
-Use Bun 1.3.14 and genuine Node 24. The aggregate gate verifies lint, types, bundle boundaries,
+Use Bun 1.3.14 and Node.js 24. The aggregate gate verifies lint, types, bundle boundaries,
 deterministic and property tests, a packed artifact in two Next.js
 minors, portfolio inventory, public provenance, documentation contracts, and the knowledge base.
 

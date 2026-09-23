@@ -1,7 +1,7 @@
 {
   "name": "@hraness/posthog",
   "version": "0.1.2",
-  "description": "Privacy-bounded PostHog routing, capture, and source-map primitives for Next.js applications.",
+  "description": "Cookieless PostHog analytics for Next.js, limited to the hosts, routes, and events your site declares, plus server error reporting and production source-map upload.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
