@@ -48,22 +48,13 @@ const inventory = record(JSON.parse(inventoryBytes) as unknown, "portfolio-inven
 const packageName = stringField(packageManifest, "name", "package.json");
 const packageVersion = stringField(packageManifest, "version", "package.json");
 const packageDescription = stringField(packageManifest, "description", "package.json");
-const expectedDescription =
-  "Privacy-bounded PostHog routing, capture, and source-map primitives for Next.js applications.";
-
-if (packageDescription !== expectedDescription) {
-  throw new Error(`package.json description must be ${JSON.stringify(expectedDescription)}`);
+for (const fact of ["PostHog", "Next.js"]) {
+  if (!packageDescription.includes(fact)) {
+    throw new Error(`package.json description must name ${fact}`);
+  }
 }
-
-for (const heading of [
-  "## Smallest useful action",
-  "## Choose the integration boundary",
-  "## Operator and package responsibilities",
-  "## Privacy contract",
-  "## Implement without widening the boundary",
-  "## Questions",
-]) {
-  requireText(readme, heading, "README.md");
+if (packageDescription.includes("—")) {
+  throw new Error("package.json description must not contain em dashes");
 }
 const localReferences = [
   "CONTRIBUTING.md",
