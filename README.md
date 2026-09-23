@@ -8,11 +8,11 @@
 ## Collect only the analytics your site defines
 
 `@hraness/posthog` connects a Next.js app to PostHog from one site definition that lists your hosts,
-routes, and allowed events. The browser adapter captures only declared events on approved
-production hosts, keeps its state in memory instead of cookies, strips URL queries, and redacts
-recognized credentials and email addresses. Separate adapters report server errors, with limits on
-repeats, and upload source maps for production builds. The route, event, and traffic helpers run
-without importing PostHog.
+routes, and allowed events. The browser adapter runs only on approved production hosts and sends
+page views, page leaves, Web Vitals, exceptions, and the custom events you declare. It keeps its
+state in memory instead of cookies, strips URL queries, and redacts recognized credentials and email
+addresses. Separate adapters report server errors, with limits on repeats, and upload source maps
+for production builds. The route, event, and traffic helpers run without importing PostHog.
 
 Your app still decides its hosts, routes, events, what counts as a conversion, the PostHog project,
 and when analytics may run. The package validates those inputs, strips or limits sensitive
