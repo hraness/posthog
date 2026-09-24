@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 
 import {
   createPostHogBeforeSend,
@@ -40,6 +41,27 @@ test("browser configuration disables replay, autocapture, identity, flags, and p
     persistence: "memory",
     cookieless_mode: "always",
     respect_dnt: true,
+  });
+});
+
+test("Web Vitals callbacks are available before eligible browser initialization", () => {
+  // Isolate the browser global from Bun's already-imported server modules.
+  // Importing alone must register callbacks without starting any observers.
+  const registration = execFileSync(process.execPath, ["--eval", `
+    globalThis.window = globalThis;
+    await import(${JSON.stringify(import.meta.dir + "/client.ts")});
+    const callbacks = window.__PosthogExtensions__?.postHogWebVitalsCallbacksByFlavor?.["web-vitals"];
+    console.log(JSON.stringify(Object.entries(callbacks ?? {}).map(([name, fn]) => [name, typeof fn]).sort()));
+  `], { encoding: "utf8", timeout: 10_000 });
+  expect(JSON.parse(registration)).toEqual([
+    ["onCLS", "function"], ["onFCP", "function"],
+    ["onINP", "function"], ["onLCP", "function"],
+  ]);
+  expect(createPostHogBrowserConfig(site, evidence).capture_performance).toEqual({
+    network_timing: false,
+    web_vitals: true,
+    web_vitals_allowed_metrics: ["LCP", "CLS", "FCP", "INP"],
+    web_vitals_attribution: false,
   });
 });
 

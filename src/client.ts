@@ -1,5 +1,8 @@
 import { posthog } from "posthog-js";
 import type { CaptureResult, PostHogConfig } from "posthog-js";
+// Register the same non-attribution callbacks before initialization so the SDK
+// uses the application bundle instead of injecting a remote script under CSP.
+import "posthog-js/dist/web-vitals.js";
 
 import {
   analyticsErrorFingerprint,
