@@ -18,7 +18,7 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.1.2 from its GitHub
+> This repository does not publish the package to npm. Install version 0.1.3 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
@@ -28,7 +28,7 @@ Pin the Git source release with framework versions inside the supported peer ran
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "github:hraness/posthog#v0.1.2",
+    "@hraness/posthog": "github:hraness/posthog#v0.1.3",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -130,6 +130,10 @@ analytics property into trusted authorization state.
 
 Mount the React adapter once in the application shell. `NEXT_PUBLIC_POSTHOG_KEY` must contain a
 public `phc_` project token.
+
+Web Vitals callbacks are bundled with the browser adapter. They do not require
+allowing a remote script host in your Content Security Policy. Keep the approved
+ingestion host in `connect-src` for the analytics requests your policy permits.
 
 ```tsx
 import { PostHogAnalytics } from "@hraness/posthog/react";

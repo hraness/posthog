@@ -4,7 +4,7 @@ const allowedImports = new Map<string, ReadonlySet<string>>([
   ["site", new Set()],
   ["event", new Set()],
   ["traffic", new Set()],
-  ["client", new Set(["posthog-js"])],
+  ["client", new Set(["posthog-js", "posthog-js/dist/web-vitals.js"])],
   ["react", new Set(["./client.js", "react", "react/jsx-runtime"])],
   ["server", new Set(["posthog-node"])],
   ["next-config", new Set(["@posthog/nextjs-config"])],
@@ -49,6 +49,9 @@ for (const entry of ["client", "react"]) {
 
 const clientSource = await readFile("dist/client.js", "utf8");
 const reactSource = await readFile("dist/react.js", "utf8");
+if (!/import\s*["']posthog-js\/dist\/web-vitals\.js["'];/u.test(clientSource)) {
+  throw new Error("client must bundle Web Vitals callbacks instead of loading a remote script");
+}
 if (!clientSource.includes('process.env["NODE_ENV"] === "production"')) {
   throw new Error("client does not preserve the runtime production eligibility check");
 }

@@ -2,6 +2,7 @@
 
 // src/client.ts
 import { posthog } from "posthog-js";
+import"posthog-js/dist/web-vitals.js";
 
 // src/site.ts
 var MAX_PATH_LENGTH = 512;
@@ -712,4 +713,4 @@ export {
   capturePostHogEvent
 };
 
-//# debugId=506097B8E608C77964756E2164756E21
+//# debugId=9B2A99E718D1F05E64756E2164756E21
