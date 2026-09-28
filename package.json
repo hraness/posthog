@@ -82,10 +82,11 @@
     "README.md"
   ],
   "scripts": {
-    "kb:refresh": "bunx --bun github:hraness/kb#v0.15.2 refresh --root kb",
-    "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.2 check --root kb --no-catalog",
-    "kb:check": "bunx --bun github:hraness/kb#v0.15.2 check --root kb && bunx --bun github:hraness/kb#v0.15.2 agents check --root kb --repo .",
-    "kb:catalog": "bunx --bun github:hraness/kb#v0.15.2 catalog --root kb",
+    "kb:refresh": "bunx --bun --package https://github.com/hraness/wordcell/releases/download/v0.24.0/hraness-wordcell-0.24.0.tgz wordcell refresh --root kb",
+    "kb:check:lane": "bunx --bun --package https://github.com/hraness/wordcell/releases/download/v0.24.0/hraness-wordcell-0.24.0.tgz wordcell check --root kb --no-catalog",
+    "kb:check": "bunx --bun --package https://github.com/hraness/wordcell/releases/download/v0.24.0/hraness-wordcell-0.24.0.tgz wordcell check --root kb && bunx --bun --package https://github.com/hraness/wordcell/releases/download/v0.24.0/hraness-wordcell-0.24.0.tgz wordcell agents check --root kb --repo .",
+    "kb:catalog": "bunx --bun --package https://github.com/hraness/wordcell/releases/download/v0.24.0/hraness-wordcell-0.24.0.tgz wordcell catalog --root kb",
+    "kb:search": "bunx --bun --package https://github.com/hraness/wordcell/releases/download/v0.24.0/hraness-wordcell-0.24.0.tgz wordcell search --root kb --mode exact --selected-passage",
     "build": "bun run ./scripts/build.ts",
     "check:boundaries": "bun run ./scripts/check-bundle-boundaries.ts",
     "check:portfolio-inventory": "bun run ./scripts/check-portfolio-inventory.ts",
