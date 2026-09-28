@@ -264,6 +264,14 @@ artifacts. Keep the personal token out of browser bundles, fixtures, logs, and r
 
 ## Questions
 
+### Why not configure `posthog-js` directly?
+
+For page views alone, configure it directly: `posthog-js` has a
+[cookieless mode](https://posthog.com/tutorials/cookieless-tracking). This package adds checks you
+would otherwise write yourself: capture only on declared hosts, canonical route paths, rejection of
+undeclared events, query stripping, credential and email redaction, repeat-limited server error
+reports, and source-map upload for production builds.
+
 ### Does the package send analytics in development or preview deployments?
 
 Not through the default browser or server paths. Browser initialization requires production
@@ -315,3 +323,5 @@ bun run check
 ```
 
 The package is available under the [MIT License](LICENSE).
+
+Maintained by [Hraness](https://hraness.com).
