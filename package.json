@@ -97,7 +97,8 @@
     "test": "bun test ./src",
     "test:property": "bun test ./src/*.property.test.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "check": "bun run check:portfolio-inventory && bun run check:product-contract && bun run check:public-boundary && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package && bun run kb:check",
+    "check:code": "bun run check:portfolio-inventory && bun run check:product-contract && bun run check:public-boundary && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package",
+    "check": "bun run check:code && bun run kb:check",
     "prepack": "bun run check"
   },
   "dependencies": {
