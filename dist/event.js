@@ -256,7 +256,7 @@ function attributionValue(value) {
   return cleanPropertyString(redactSensitiveText(value));
 }
 function analyticsAttributionQuery(site, url) {
-  if (isSensitiveAnalyticsPath(site, url.pathname)) {
+  if (site.attributionMode === "referrer_only" || isSensitiveAnalyticsPath(site, url.pathname)) {
     return "";
   }
   const kept = new URLSearchParams;
@@ -379,7 +379,7 @@ function isSensitiveProviderLocation(site, currentUrl) {
 function sanitizeProviderProperties(site, properties, currentUrl = properties["$current_url"], stripAttribution = false) {
   const context = {
     site,
-    sensitive: stripAttribution || isSensitiveProviderLocation(site, currentUrl),
+    sensitive: site.attributionMode === "referrer_only" || stripAttribution || isSensitiveProviderLocation(site, currentUrl),
     seen: new WeakSet
   };
   const sanitized = {};
@@ -585,4 +585,4 @@ export {
   ANALYTICS_ATTRIBUTION_PARAMETERS
 };
 
-//# debugId=08D9DE0BF574A2EF64756E2164756E21
+//# debugId=12FBD679544369D864756E2164756E21

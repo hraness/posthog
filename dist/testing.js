@@ -218,7 +218,7 @@ function attributionValue(value) {
   return cleanPropertyString(redactSensitiveText(value));
 }
 function analyticsAttributionQuery(site, url) {
-  if (isSensitiveAnalyticsPath(site, url.pathname)) {
+  if (site.attributionMode === "referrer_only" || isSensitiveAnalyticsPath(site, url.pathname)) {
     return "";
   }
   const kept = new URLSearchParams;
@@ -341,7 +341,7 @@ function isSensitiveProviderLocation(site, currentUrl) {
 function sanitizeProviderProperties(site, properties, currentUrl = properties["$current_url"], stripAttribution = false) {
   const context = {
     site,
-    sensitive: stripAttribution || isSensitiveProviderLocation(site, currentUrl),
+    sensitive: site.attributionMode === "referrer_only" || stripAttribution || isSensitiveProviderLocation(site, currentUrl),
     seen: new WeakSet
   };
   const sanitized = {};
@@ -464,11 +464,14 @@ function sourceForAttribution(value, sources) {
   return null;
 }
 function parseAttributionSource(site, currentUrl) {
-  if (!currentUrl) {
+  if (!currentUrl || site.attributionMode === "referrer_only") {
     return null;
   }
   try {
-    return new URL(currentUrl, `https://${site.canonicalDomain}`).searchParams.get("utm_source");
+    const url = new URL(currentUrl, `https://${site.canonicalDomain}`);
+    if (isSensitiveAnalyticsPath(site, url.pathname) || !isAllowedAnalyticsPath(site, url.pathname))
+      return null;
+    return url.searchParams.get("utm_source");
   } catch {
     return null;
   }
@@ -601,9 +604,8 @@ function createPostHogBeforeSend(site, resolveEvidence) {
       return null;
     }
     const rawReferrer = typeof capture.properties.$referrer === "string" ? capture.properties.$referrer : evidence.referrer;
-    const traffic = classifyAnalyticsTraffic(site, rawReferrer, rawCurrentUrl);
     const location = parseAnalyticsLocation(site, rawCurrentUrl);
-    for (const url of [rawCurrentUrl, capture.properties.$initial_current_url, capture.properties.$session_entry_url]) {
+    for (const url of [evidence.href, rawCurrentUrl, capture.properties.$initial_current_url, capture.properties.$session_entry_url]) {
       if (typeof url !== "string")
         continue;
       try {
@@ -613,6 +615,7 @@ function createPostHogBeforeSend(site, resolveEvidence) {
         }
       } catch {}
     }
+    const traffic = classifyAnalyticsTraffic(site, rawReferrer, sensitiveAttributionSeen ? null : rawCurrentUrl);
     const properties = sanitizeProviderProperties(site, capture.properties, rawCurrentUrl, sensitiveAttributionSeen);
     properties.token = projectToken;
     const $host = location?.hostname;
@@ -815,8 +818,16 @@ function checkPostHogContract(options) {
     } catch {
       violations.push(`${label}: $current_url is not a URL`);
     }
-    if (params.join(",") !== "gclid,utm_source") {
-      violations.push(`${label}: $current_url query is [${params.join(",")}], want [gclid,utm_source]`);
+    const expectedParams = site.attributionMode === "referrer_only" ? "" : "gclid,utm_source";
+    if (params.join(",") !== expectedParams) {
+      violations.push(`${label}: $current_url query is [${params.join(",")}], want [${expectedParams}]`);
+    }
+    if (site.attributionMode === "referrer_only") {
+      const serialized = JSON.stringify(event.properties);
+      if (serialized.includes("contractclick") || serialized.includes('"utm_source"')) {
+        violations.push(`${label}: referrer-only site kept attribution`);
+      }
+      continue;
     }
     if (propertyOf(event, "utm_source") !== "contract") {
       violations.push(`${label}: utm_source was not kept`);
@@ -872,4 +883,4 @@ export {
   HARNESS_API_KEY
 };
 
-//# debugId=ECF60ACED47CD36364756E2164756E21
+//# debugId=A5E9AB02F91A354B64756E2164756E21
