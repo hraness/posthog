@@ -9,7 +9,7 @@ function normalizeAnalyticsPathname(pathname) {
   const withoutQuery = pathname.split(/[?#]/u, 1)[0] ?? "/";
   const withLeadingSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
   const collapsed = withLeadingSlash.replace(/\/{2,}/gu, "/");
-  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/+$/u, "") : collapsed;
+  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/$/u, "") : collapsed;
   return withoutTrailingSlash.slice(0, MAX_PATH_LENGTH) || "/";
 }
 function isAllowedAnalyticsHost(site, hostname) {
@@ -338,4 +338,4 @@ export {
   ExceptionBudget
 };
 
-//# debugId=F4E9A6E7E7C1B04D64756E2164756E21
+//# debugId=6CAEBFA594C4770064756E2164756E21

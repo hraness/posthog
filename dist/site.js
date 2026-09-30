@@ -9,7 +9,7 @@ function normalizeAnalyticsPathname(pathname) {
   const withoutQuery = pathname.split(/[?#]/u, 1)[0] ?? "/";
   const withLeadingSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
   const collapsed = withLeadingSlash.replace(/\/{2,}/gu, "/");
-  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/+$/u, "") : collapsed;
+  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/$/u, "") : collapsed;
   return withoutTrailingSlash.slice(0, MAX_PATH_LENGTH) || "/";
 }
 function isAllowedAnalyticsHost(site, hostname) {
@@ -92,4 +92,4 @@ export {
   POSTHOG_SCHEMA_VERSION
 };
 
-//# debugId=AE5CCF5A003BD25464756E2164756E21
+//# debugId=4BE20740A57F3A0164756E2164756E21
