@@ -18,7 +18,7 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.3.1 from its GitHub
+> This repository does not publish the package to npm. Install version 0.3.2 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
@@ -28,7 +28,7 @@ Pin the Git source release with framework versions inside the supported peer ran
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "github:hraness/posthog#v0.3.1",
+    "@hraness/posthog": "github:hraness/posthog#v0.3.2",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -250,7 +250,7 @@ observability failure does not change the request error path.
 | Server exception budget | Allows at most 30 exceptions per rolling minute and three occurrences per fingerprint. Provider failures are swallowed. |
 | Provider destination | Defaults to PostHog's US ingestion host. A caller that supplies `apiHost` owns approval of that destination. |
 
-Version 0.3.0 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
+Version 0.3.2 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
 Sites moving from 0.1.x send `analytics_schema_version: 2`.
 
 ## Test your site against real PostHog.js
@@ -375,6 +375,27 @@ false while the shared policy is unresolved or blocked. Events from that time ar
 Conversions and event schemas remain owned by the consuming site. The shared regional
 consent gate adds a collection boundary before browser analytics starts.
 
+### Reuse consent with an existing analytics client
+
+`@hraness/posthog/consent` has no provider or framework runtime imports. Existing browser
+clients can preserve their own event limits and SDK configuration while sharing the Accounts
+region policy:
+
+```ts
+import { getBrowserConsent } from "@hraness/posthog/consent";
+
+const consent = getBrowserConsent();
+const unsubscribe = consent?.subscribe(() => {
+  if (consent.allowed()) startOrResumeAnalytics();
+  else stopAnalytics();
+});
+```
+
+Keep the consuming site's production-host and route checks. Initialize the provider only while
+`consent.allowed()` is true, check it before every capture, and discard events from blocked
+periods. Stop collection when the subscription reports refusal and call `unsubscribe` when
+the consuming component is removed. On the server, `getBrowserConsent()` returns `undefined`.
+
 ### Which Next.js versions are verified?
 
 The package accepts Next.js 16.2 through the 16.x line. Its package smoke test installs the packed
@@ -386,6 +407,7 @@ entry point with Node.js 24 itself (not Bun).
 - [Site and route types](src/site.ts)
 - [Event sanitization and budgets](src/event.ts)
 - [Browser adapter](src/client.ts)
+- [Shared browser consent](src/consent.ts)
 - [Test harness](src/testing.ts)
 - [Server adapter](src/server.ts)
 - [Source-map adapter](src/next-config.ts)
