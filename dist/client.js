@@ -49,7 +49,20 @@ function ruleMatches(rule, pathname) {
   if (rule.match === "exact") {
     return pathname === rulePath;
   }
-  return pathname === rulePath || pathname.startsWith(`${rulePath}/`);
+  return rulePath === "/" || pathname === rulePath || pathname.startsWith(`${rulePath}/`);
+}
+function policyPathname(pathname) {
+  try {
+    return normalizeAnalyticsPathname(decodeURIComponent(normalizeAnalyticsPathname(pathname)));
+  } catch {
+    return null;
+  }
+}
+function isAllowedAnalyticsPath(site, pathname) {
+  const normalized = policyPathname(pathname);
+  if (normalized === null)
+    return false;
+  return !site.excludedPaths?.some((rule) => ruleMatches(rule, normalized)) && (site.allowedPaths === undefined || site.allowedPaths.some((rule) => ruleMatches(rule, normalized)));
 }
 function slugForRule(rule, pathname) {
   if (!rule.captureSlug) {
@@ -61,7 +74,7 @@ function slugForRule(rule, pathname) {
 }
 function classifyAnalyticsRoute(site, location) {
   const parsed = parseAnalyticsLocation(site, location);
-  if (!parsed) {
+  if (!parsed || !isAllowedAnalyticsPath(site, parsed.pathname)) {
     return null;
   }
   const rule = site.routes.find((candidate) => ruleMatches(candidate, parsed.pathname));
@@ -86,7 +99,9 @@ function isAllowedDelegatedEvent(site, eventName) {
   return site.delegatedEvents?.includes(eventName) ?? false;
 }
 function isSensitiveAnalyticsPath(site, pathname) {
-  const normalized = normalizeAnalyticsPathname(pathname);
+  const normalized = policyPathname(pathname);
+  if (normalized === null)
+    return true;
   return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
 }
 
@@ -767,9 +782,13 @@ function currentBrowserEvidence() {
     production: typeof process !== "undefined" && process.env["NODE_ENV"] === "production"
   };
 }
+function liveRouteAllowed(site) {
+  const href = typeof window === "undefined" || typeof window.location === "undefined" ? undefined : window.location.href;
+  return href === undefined || classifyAnalyticsRoute(site, href) !== null;
+}
 function isPostHogBrowserEligible(options) {
   const evidence = options.evidence ?? currentBrowserEvidence();
-  return Boolean(evidence?.production && options.apiKey?.startsWith("phc_") && isAllowedAnalyticsHost(options.site, evidence.hostname));
+  return Boolean(evidence?.production && options.apiKey?.startsWith("phc_") && isAllowedAnalyticsHost(options.site, evidence.hostname) && classifyAnalyticsRoute(options.site, evidence.href) !== null && liveRouteAllowed(options.site));
 }
 function allowedEvent(site, eventName) {
   return BUILT_IN_EVENTS.has(eventName) || isAllowedCustomEvent(site, eventName);
@@ -777,6 +796,10 @@ function allowedEvent(site, eventName) {
 function createPostHogBeforeSend(site, resolveEvidence) {
   let sensitiveAttributionSeen = false;
   return (capture) => {
+    if (!liveRouteAllowed(site)) {
+      sensitiveAttributionSeen = true;
+      return null;
+    }
     if (!capture || !allowedEvent(site, capture.event)) {
       return null;
     }
@@ -785,9 +808,14 @@ function createPostHogBeforeSend(site, resolveEvidence) {
       return null;
     }
     const evidence = resolveEvidence();
+    if (!classifyAnalyticsRoute(site, evidence.href)) {
+      sensitiveAttributionSeen = true;
+      return null;
+    }
     const rawCurrentUrl = typeof capture.properties.$current_url === "string" ? capture.properties.$current_url : evidence.href;
     const route = classifyAnalyticsRoute(site, rawCurrentUrl);
     if (!route) {
+      sensitiveAttributionSeen = true;
       return null;
     }
     const rawReferrer = typeof capture.properties.$referrer === "string" ? capture.properties.$referrer : evidence.referrer;
@@ -797,7 +825,8 @@ function createPostHogBeforeSend(site, resolveEvidence) {
       if (typeof url !== "string")
         continue;
       try {
-        if (isSensitiveAnalyticsPath(site, new URL(url, `https://${site.canonicalDomain}`).pathname)) {
+        const pathname = new URL(url, `https://${site.canonicalDomain}`).pathname;
+        if (isSensitiveAnalyticsPath(site, pathname) || !isAllowedAnalyticsPath(site, pathname)) {
           sensitiveAttributionSeen = true;
         }
       } catch {}
@@ -912,10 +941,10 @@ function observePostHogBrowser(options, ready) {
   };
 }
 function capturePostHogEvent(site, eventName, properties = {}, options = {}) {
-  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
+  if (getBrowserConsent()?.allowed() !== true || !liveRouteAllowed(site) || activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
     return false;
   }
-  if (options.href !== undefined && !parseAnalyticsLocation(site, options.href)) {
+  if (options.href !== undefined && !classifyAnalyticsRoute(site, options.href)) {
     return false;
   }
   posthog.capture(eventName, {
@@ -928,7 +957,7 @@ function capturePostHogEvent(site, eventName, properties = {}, options = {}) {
   return true;
 }
 function capturePostHogException(site, value, properties = {}) {
-  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id) {
+  if (getBrowserConsent()?.allowed() !== true || !liveRouteAllowed(site) || activeSiteId !== site.id) {
     return false;
   }
   if (value && typeof value === "object") {
@@ -987,7 +1016,7 @@ function currentReferrer() {
   return typeof document === "undefined" ? "" : document.referrer;
 }
 function capturePostHogPageNotFound(site, input = {}) {
-  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id) {
+  if (getBrowserConsent()?.allowed() !== true || !liveRouteAllowed(site) || activeSiteId !== site.id) {
     return false;
   }
   const properties = pageNotFoundProperties({
@@ -1029,4 +1058,4 @@ export {
   capturePostHogCtaClicked
 };
 
-//# debugId=3FCDF4B518F79EB464756E2164756E21
+//# debugId=77A23AE11443A49964756E2164756E21

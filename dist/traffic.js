@@ -44,7 +44,20 @@ function ruleMatches(rule, pathname) {
   if (rule.match === "exact") {
     return pathname === rulePath;
   }
-  return pathname === rulePath || pathname.startsWith(`${rulePath}/`);
+  return rulePath === "/" || pathname === rulePath || pathname.startsWith(`${rulePath}/`);
+}
+function policyPathname(pathname) {
+  try {
+    return normalizeAnalyticsPathname(decodeURIComponent(normalizeAnalyticsPathname(pathname)));
+  } catch {
+    return null;
+  }
+}
+function isAllowedAnalyticsPath(site, pathname) {
+  const normalized = policyPathname(pathname);
+  if (normalized === null)
+    return false;
+  return !site.excludedPaths?.some((rule) => ruleMatches(rule, normalized)) && (site.allowedPaths === undefined || site.allowedPaths.some((rule) => ruleMatches(rule, normalized)));
 }
 function slugForRule(rule, pathname) {
   if (!rule.captureSlug) {
@@ -56,7 +69,7 @@ function slugForRule(rule, pathname) {
 }
 function classifyAnalyticsRoute(site, location) {
   const parsed = parseAnalyticsLocation(site, location);
-  if (!parsed) {
+  if (!parsed || !isAllowedAnalyticsPath(site, parsed.pathname)) {
     return null;
   }
   const rule = site.routes.find((candidate) => ruleMatches(candidate, parsed.pathname));
@@ -81,7 +94,9 @@ function isAllowedDelegatedEvent(site, eventName) {
   return site.delegatedEvents?.includes(eventName) ?? false;
 }
 function isSensitiveAnalyticsPath(site, pathname) {
-  const normalized = normalizeAnalyticsPathname(pathname);
+  const normalized = policyPathname(pathname);
+  if (normalized === null)
+    return true;
   return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
 }
 
@@ -233,4 +248,4 @@ export {
   classifyAnalyticsTraffic
 };
 
-//# debugId=1630BF59FFEDD8A264756E2164756E21
+//# debugId=716A58E5D8C9167E64756E2164756E21

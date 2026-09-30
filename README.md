@@ -18,7 +18,7 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.3.1 from its GitHub
+> This repository does not publish the package to npm. Install version 0.3.2 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
@@ -28,7 +28,7 @@ Pin the Git source release with framework versions inside the supported peer ran
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "github:hraness/posthog#v0.3.1",
+    "@hraness/posthog": "github:hraness/posthog#v0.3.2",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -250,7 +250,7 @@ observability failure does not change the request error path.
 | Server exception budget | Allows at most 30 exceptions per rolling minute and three occurrences per fingerprint. Provider failures are swallowed. |
 | Provider destination | Defaults to PostHog's US ingestion host. A caller that supplies `apiHost` owns approval of that destination. |
 
-Version 0.3.1 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
+Version 0.3.2 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
 Sites moving from 0.1.x send `analytics_schema_version: 2`.
 
 ## Test your site against real PostHog.js
@@ -428,3 +428,5 @@ bun run check
 The package is available under the [MIT License](LICENSE).
 
 Maintained by [Hraness](https://hraness.com).
+
+Private routes can opt out completely with `excludedPaths`. Use `allowedPaths` to limit analytics to a public section. Both accept `{ match: "exact" | "prefix", path: string }` rules; prefixes match path segments, exclusions win, and an empty allowlist disables all routes. The client checks both the live and captured URL before sending, including after SPA navigation. Server helpers use the same route policy. `sensitivePaths` only removes attribution; it does not exclude events.

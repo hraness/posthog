@@ -115,3 +115,32 @@ test("sensitive navigation cannot persist attribution into later public events",
     }
   }
 }, 30_000);
+
+test("real SDK drops excluded SPA routes and queued URLs, then resumes public capture", () => {
+  const result = runPostHogHarness({
+    site: { ...site, excludedPaths: [{ match: "prefix", path: "/p" }] },
+    scenarios: [
+      { href: "https://example.com/?utm_source=public", captures: [{ event: "$pageview" }] },
+      { href: "https://example.com/p/private?utm_source=private", captures: [
+        { event: "$pageview" }, { event: "$pageleave", properties: { $current_url: "https://example.com/" } },
+      ] },
+      { href: "https://example.com/%70/private?utm_source=private", captures: [{ event: "$pageview" }] },
+      { href: "https://example.com/pricing", captures: [
+        { event: "$pageview", properties: { $current_url: "https://example.com/%70/private" } },
+        { event: "$pageview", properties: { $current_url: "https://example.com/p/private" } },
+        { event: "$pageview" },
+      ] },
+    ],
+  });
+  expect(result.sent.map(event => event.properties.$current_url)).toEqual([
+    "https://example.com/?utm_source=public", "https://example.com/pricing",
+  ]);
+  expect(JSON.stringify(result.sent)).not.toContain("private");
+});
+
+test("contract accepts excluded private routes only when no request is sent", () => {
+  expect(checkPostHogContract({
+    site: { ...site, excludedPaths: [{ match: "prefix", path: "/auth" }] },
+    publicPath: "/pricing", sensitivePath: "/auth/callback",
+  }).violations).toEqual([]);
+});

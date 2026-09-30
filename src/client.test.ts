@@ -291,3 +291,14 @@ test("a departing-page URL controls host and path while referrer paths remain pr
     $session_entry_referrer: "https://outside.example",
   });
 });
+
+test("excluded or non-public initial URLs cannot initialize analytics", () => {
+  const options = { site: { ...site,
+    allowedPaths: [{ match: "prefix" as const, path: "/eds" }],
+    excludedPaths: [{ match: "prefix" as const, path: "/eds/private" }],
+  }, apiKey: "phc_public" };
+  for (const path of ["/", "/eds/private", "/eds/private/a"]) {
+    expect(isPostHogBrowserEligible({ ...options, evidence: { ...evidence, href: `https://example.com${path}` } })).toBe(false);
+  }
+  expect(isPostHogBrowserEligible({ ...options, evidence: { ...evidence, href: "https://example.com/eds/docs" } })).toBe(true);
+});

@@ -11,7 +11,7 @@ import { gunzipSync } from "node:zlib";
 
 import { createPostHogBeforeSend } from "./client.js";
 import { isStandardAnalyticsEventName } from "./event.js";
-import type { PostHogSiteDefinition } from "./site.js";
+import { isAllowedAnalyticsPath, type PostHogSiteDefinition } from "./site.js";
 
 export type PostHogHarnessCapture = Readonly<{
   event: string;
@@ -216,8 +216,15 @@ export function checkPostHogContract(options: PostHogContractOptions): PostHogCo
   });
 
   const violations: string[] = [];
+  const receivedByUuid = new Map<unknown, Record<string, unknown>>();
+  for (const value of result.received) {
+    if (value && typeof value === "object") {
+      const received = value as { uuid?: unknown; properties?: Record<string, unknown> };
+      receivedByUuid.set(received.uuid, received.properties ?? {});
+    }
+  }
   const publicEvents = result.sent.filter((event) => {
-    const url = propertyOf(event, "$current_url");
+    const url = receivedByUuid.get(event["uuid"])?.["$current_url"] ?? propertyOf(event, "$current_url");
     return typeof url === "string" && !url.includes(options.sensitivePath);
   });
   const sensitiveEvents = result.sent.filter((event) => !publicEvents.includes(event));
@@ -226,17 +233,12 @@ export function checkPostHogContract(options: PostHogContractOptions): PostHogCo
       violations.push(`${expected.event}: no request was sent`);
     }
   }
-  if (sensitiveEvents.length === 0) {
-    violations.push(`${options.sensitivePath}: no sensitive-path $pageview was sent`);
+  if (isAllowedAnalyticsPath(site, options.sensitivePath)) {
+    if (sensitiveEvents.length === 0) violations.push(`${options.sensitivePath}: no sensitive-path $pageview was sent`);
+  } else if (sensitiveEvents.length > 0) {
+    violations.push(`${options.sensitivePath}: excluded route sent events`);
   }
 
-  const receivedByUuid = new Map<unknown, Record<string, unknown>>();
-  for (const value of result.received) {
-    if (value && typeof value === "object") {
-      const received = value as { uuid?: unknown; properties?: Record<string, unknown> };
-      receivedByUuid.set(received.uuid, received.properties ?? {});
-    }
-  }
   for (const event of result.sent) {
     const label = event.event;
     const received = receivedByUuid.get(event["uuid"]) ?? {};
