@@ -10,11 +10,11 @@ const site = {
   schemaVersion: POSTHOG_SCHEMA_VERSION,
   routes: [{ match: "exact", path: "/", pageKind: "home" }],
   customEvents: [],
-  stripQueryAttribution: true,
+  sensitivePaths: [{ match: "prefix", path: "/private-current-value" }],
   unknownCanonicalPath: "/not-found",
 } satisfies PostHogSiteDefinition;
 
-test("before-send collapses every provider pathname and removes query attribution", () => {
+test("before-send collapses every provider pathname and drops attribution on sensitive paths", () => {
   const beforeSend = createPostHogBeforeSend(site, () => ({
     href: "https://example.com/private-fallback-value?utm_campaign=private",
     referrer: "",

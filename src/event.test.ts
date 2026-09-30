@@ -49,10 +49,9 @@ test("redacts queries and referrer paths while preserving provider payload shape
   });
 });
 
-test("collapses unknown owned provider URLs when the site requires it", () => {
+test("collapses unknown owned URLs and keeps exactly the attribution keep-list", () => {
   const privacySafeSite = {
     ...site,
-    stripQueryAttribution: true,
     unknownCanonicalPath: "/not-found",
   } satisfies PostHogSiteDefinition;
 
@@ -84,7 +83,7 @@ test("collapses unknown owned provider URLs when the site requires it", () => {
   ] as const;
   const sanitized = sanitizeProviderProperties(privacySafeSite, {
     ...Object.fromEntries(attributionKeys.map((key) => [key, `private-${key}`])),
-    $current_url: "https://example.com/private/alice@example.com?token=secret",
+    $current_url: "https://example.com/private/alice@example.com?token=secret&gclid=click&_kx=person&utm_source=news",
     $initial_current_url: "https://example.com/another/private-value",
     $initial_campaign_params: { utm_campaign: "private-initial-value" },
     $initial_pathname: "/private-initial-value",
@@ -94,18 +93,59 @@ test("collapses unknown owned provider URLs when the site requires it", () => {
     $session_entry_utm_source: "private-session-source",
     safe_count: 2,
   });
+  const dropped = new Set(["_kx", "gclsrc", "qclid"]);
   expect(sanitized).toEqual({
-    $current_url: "https://example.com/not-found",
+    ...Object.fromEntries(
+      attributionKeys.filter((key) => !dropped.has(key)).map((key) => [key, `private-${key}`]),
+    ),
+    $current_url: "https://example.com/not-found?utm_source=news&gclid=click",
     $initial_current_url: "https://example.com/not-found",
     $initial_pathname: "/not-found",
     $pathname: "/not-found",
     $prev_pageview_pathname: "/not-found",
     $session_entry_pathname: "/not-found",
+    $session_entry_utm_source: "private-session-source",
     safe_count: 2,
   });
-  for (const key of attributionKeys) {
+  expect(sanitized).not.toHaveProperty("$initial_campaign_params");
+  for (const key of dropped) {
     expect(sanitized).not.toHaveProperty(key);
   }
+});
+
+test("drops the whole query and all attribution on sensitive paths", () => {
+  const sensitiveSite = {
+    ...site,
+    sensitivePaths: [{ match: "prefix", path: "/auth" }],
+  } satisfies PostHogSiteDefinition;
+  expect(sanitizeProviderProperties(sensitiveSite, {
+    $current_url: "https://example.com/auth/callback?utm_source=news&gclid=click&code=abc&state=xyz",
+    $initial_utm_source: "earlier",
+    gclid: "click",
+    utm_source: "news",
+  })).toEqual({ $current_url: "https://example.com/auth/callback" });
+});
+
+test("redacts personal-data property names and keeps identity transport values", () => {
+  expect(sanitizeProviderProperties(site, {
+    $cookieless_mode: true,
+    $raw_user_agent: "Mozilla/5.0 (token=abc)",
+    $session_id: "session-1",
+    distinct_id: "$posthog_cookieless",
+    email: "a@example.com",
+    code: "oauth-code",
+    secret: "value",
+    note: "state=xyz&token=abc&refresh_token=def",
+  })).toEqual({
+    $cookieless_mode: true,
+    $raw_user_agent: "Mozilla/5.0 (token=abc)",
+    $session_id: "session-1",
+    distinct_id: "$posthog_cookieless",
+    email: "[redacted]",
+    code: "[redacted]",
+    secret: "[redacted]",
+    note: "state=[redacted]&token=[redacted]&refresh_token=[redacted]",
+  });
 });
 
 test("keeps explicit attribution for sites that do not opt out", () => {
@@ -178,4 +218,13 @@ test("exception budget removes expired fingerprint buckets", () => {
 
   expect(budget.allow("current", 11)).toBe(true);
   expect(budget.activeFingerprintCount).toBe(1);
+});
+
+test("redacts credential property aliases and provider-prefixed forms", () => {
+  for (const key of ["state", "access_token", "refresh_token", "id_token", "session_token", "api_key", "authorization"]) {
+    for (const prefix of ["", "$", "$initial_", "$session_entry_"]) {
+      expect(sanitizeProviderProperties(site, { [`${prefix}${key}`]: "private-value" }))
+        .toEqual({ [`${prefix}${key}`]: "[redacted]" });
+    }
+  }
 });

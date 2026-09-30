@@ -1,4 +1,4 @@
-export const POSTHOG_SCHEMA_VERSION = 1 as const;
+export const POSTHOG_SCHEMA_VERSION = 2 as const;
 
 const MAX_PATH_LENGTH = 512;
 const MAX_SLUG_LENGTH = 160;
@@ -11,6 +11,11 @@ export type AnalyticsRouteRule = Readonly<{
   captureSlug?: boolean;
 }>;
 
+export type AnalyticsPathRule = Readonly<{
+  match: "exact" | "prefix";
+  path: string;
+}>;
+
 export type PostHogSiteDefinition = Readonly<{
   id: string;
   canonicalDomain: string;
@@ -19,6 +24,17 @@ export type PostHogSiteDefinition = Readonly<{
   routes: readonly AnalyticsRouteRule[];
   customEvents: readonly string[];
   delegatedEvents?: readonly string[];
+  /**
+   * Routes whose whole query, campaign attribution included, is removed before
+   * delivery: sign-in, auth callbacks, account, billing and checkout returns,
+   * invite links, and any user-owned or private route.
+   */
+  sensitivePaths?: readonly AnalyticsPathRule[];
+  /**
+   * @deprecated Since 0.3.0 the query is always reduced to the campaign
+   * attribution keep-list (`utm_*` and ad click IDs), so this option has no
+   * effect. Use `sensitivePaths` to drop attribution on private routes.
+   */
   stripQueryAttribution?: boolean;
   unknownCanonicalPath?: string;
 }>;
@@ -88,7 +104,7 @@ export function parseAnalyticsLocation(
   }
 }
 
-function ruleMatches(rule: AnalyticsRouteRule, pathname: string): boolean {
+function ruleMatches(rule: AnalyticsPathRule, pathname: string): boolean {
   const rulePath = normalizeAnalyticsPathname(rule.path);
   if (rule.match === "exact") {
     return pathname === rulePath;
@@ -148,4 +164,12 @@ export function isAllowedDelegatedEvent(
   eventName: string,
 ): boolean {
   return site.delegatedEvents?.includes(eventName) ?? false;
+}
+
+export function isSensitiveAnalyticsPath(
+  site: PostHogSiteDefinition,
+  pathname: string,
+): boolean {
+  const normalized = normalizeAnalyticsPathname(pathname);
+  return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
 }
