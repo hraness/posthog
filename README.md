@@ -18,7 +18,7 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.3.5 from its GitHub
+> This repository does not publish the package to npm. Install version 0.3.6 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
@@ -28,7 +28,7 @@ Pin the verified immutable GitHub Release tarball with framework versions inside
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "https://github.com/hraness/posthog/releases/download/v0.3.5/hraness-posthog-0.3.5.tgz",
+    "@hraness/posthog": "https://github.com/hraness/posthog/releases/download/v0.3.6/hraness-posthog-0.3.6.tgz",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -265,8 +265,10 @@ The default `"standard"` mode retains the 0.3.1 attribution behavior; the deprec
 `stripQueryAttribution` field remains ignored in that mode. List private routes
 in `sensitivePaths` when retaining attribution elsewhere.
 
-Browser events use immediate requests (`request_batching: false`), so an event
-accepted before a consent change cannot remain queued for a later batch flush.
+Browser events use immediate fetch requests with a consent-scoped abort signal.
+Withdrawing consent aborts pending requests and their retries; accepting again
+allows new events without reviving earlier requests. Page leaves use fetch with
+keepalive instead of sendBeacon so they obey the same cancellation.
 Sites moving from 0.1.x send `analytics_schema_version: 2`.
 
 ## Test your site against real PostHog.js
@@ -398,14 +400,24 @@ clients can preserve their own event limits and SDK configuration while sharing 
 region policy:
 
 ```ts
-import { getBrowserConsent } from "@hraness/posthog/consent";
+import { getBrowserConsent, installConsentTransport } from "@hraness/posthog/consent";
 
 const consent = getBrowserConsent();
 const unsubscribe = consent?.subscribe(() => {
-  if (consent.allowed()) startOrResumeAnalytics();
+  if (consent.allowed() && installConsentTransport(posthog, consent)) startOrResumeAnalytics();
   else stopAnalytics();
 });
 ```
+
+Install this transport guard before initializing a custom PostHog provider. Set
+`request_batching: false`; batching could retain events before their first transport
+attempt, so the guard refuses transports while batching is enabled. It uses the pinned
+provider's final request seam because its public cookieless opt-out cannot stop retries;
+unknown provider/request shapes fail closed. PostHog.js **1.412.1 and 1.422.5** are
+qualified; other versions are refused before initialization. Keep custom providers
+pinned to one of these versions. PostHog.js 1.434.5 bypasses this request seam. The
+package tests actual failed requests, withdrawal, reacceptance and page leaves;
+browser verification covers both qualified versions.
 
 Keep the consuming site's production-host and route checks. Initialize the provider only while
 `consent.allowed()` is true, check it before every capture, and discard events from blocked

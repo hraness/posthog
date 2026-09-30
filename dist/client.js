@@ -569,7 +569,7 @@ function installCommandCopiedProperties(input) {
 }
 
 // src/client.ts
-import { getBrowserConsent } from "./consent.js";
+import { getBrowserConsent, installConsentTransport } from "./consent.js";
 
 // src/traffic.ts
 var AI_SOURCES = [
@@ -915,7 +915,7 @@ function initializePostHogBrowser(options) {
   }
   const consent = getBrowserConsent();
   consent?.start();
-  if (!consent?.allowed())
+  if (!consent?.allowed() || !installConsentTransport(posthog, consent))
     return false;
   if (activeSiteId === options.site.id) {
     return true;
@@ -1107,4 +1107,4 @@ export {
   capturePostHogCtaClicked
 };
 
-//# debugId=FCDBFEC6F75C3A5F64756E2164756E21
+//# debugId=21A92CA9B1DCFC4664756E2164756E21
