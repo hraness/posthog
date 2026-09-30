@@ -61,3 +61,11 @@ test("optionally collapses unknown owned paths without inferring a category", ()
 test("normalizes path shape", () => {
   expect(normalizeAnalyticsPathname("research//sleep/?q=1#x")).toBe("/research/sleep");
 });
+
+
+test("normalizes long slash runs with a bounded canonical result", () => {
+  const separators = "/".repeat(100_000);
+  expect(normalizeAnalyticsPathname(separators)).toBe("/");
+  expect(normalizeAnalyticsPathname(`${separators}research${separators}sleep${separators}?secret=yes`)).toBe("/research/sleep");
+  expect(normalizeAnalyticsPathname(`research${separators}sleep`)).toBe("/research/sleep");
+});

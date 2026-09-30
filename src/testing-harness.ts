@@ -59,6 +59,7 @@ const pageDocument = {
 };
 const sent: string[] = [];
 const browserGlobals: Record<string, unknown> = {
+  localStorage: { getItem: () => "accepted" },
   document: pageDocument,
   location: pageLocation,
   navigator: {
@@ -103,7 +104,7 @@ for (const [name, value] of Object.entries(browserGlobals)) {
 // posthog-js reads browser globals when it loads, so it loads only after the
 // page shape above exists.
 const { posthog } = await import("posthog-js");
-const { createPostHogBrowserConfig } = await import("./client.js");
+const { createPostHogBrowserConfig, initializePostHogBrowser } = await import("./client.js");
 
 const received: unknown[] = [];
 const returned: unknown[] = [];
@@ -113,7 +114,20 @@ const productionBeforeSend = config.before_send;
 if (typeof productionBeforeSend !== "function") {
   throw new Error("production config has no before_send function");
 }
-posthog.init(input.apiKey, {
+// Initialize through the real consent path with an explicit accepted choice.
+// Suppress the initial automatic view, then install the explicit capture setup.
+const originalInit = posthog.init.bind(posthog);
+posthog.init = (token, options, name) => originalInit(token, {
+  ...options, capture_pageview: false, capture_pageleave: false,
+  capture_performance: false, disable_external_dependency_loading: true,
+}, name);
+initializePostHogBrowser({
+  site: input.site, apiKey: input.apiKey,
+  ...(input.apiHost ? { apiHost: input.apiHost } : {}),
+  evidence: { ...evidence, hostname: pageLocation.hostname, production: true },
+});
+posthog.init = originalInit;
+posthog.set_config({
   ...config,
   // Explicit captures only; everything else is the production config.
   capture_pageview: false,

@@ -11,7 +11,7 @@ function normalizeAnalyticsPathname(pathname) {
   const withoutQuery = pathname.split(/[?#]/u, 1)[0] ?? "/";
   const withLeadingSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
   const collapsed = withLeadingSlash.replace(/\/{2,}/gu, "/");
-  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/+$/u, "") : collapsed;
+  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/$/u, "") : collapsed;
   return withoutTrailingSlash.slice(0, MAX_PATH_LENGTH) || "/";
 }
 function isAllowedAnalyticsHost(site, hostname) {
@@ -687,7 +687,7 @@ async function capturePostHogEvent(options, input) {
       distinctId: `server:${options.site.id}`,
       event: input.event,
       properties: {
-        ...sanitizeProviderProperties(options.site, normalizeAnalyticsProperties(input.properties)),
+        ...sanitizeProviderProperties(options.site, normalizeAnalyticsProperties(input.properties), `https://${normalizeAnalyticsHostname(input.hostname)}${input.pathname ?? "/"}`),
         ...route,
         $process_person_profile: false
       },
@@ -703,4 +703,4 @@ export {
   capturePostHogEvent
 };
 
-//# debugId=95708813D780A26464756E2164756E21
+//# debugId=ED8AF6AF7BEEDC6264756E2164756E21

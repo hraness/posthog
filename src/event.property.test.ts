@@ -65,3 +65,16 @@ test("property: expired exception fingerprints do not accumulate", () => {
     },
   ));
 });
+
+test("property: sensitive paths discard every campaign value and URL query", () => {
+  fc.assert(fc.property(fc.string(), (value) => {
+    const privateSite = { ...site, sensitivePaths: [{ match: "prefix" as const, path: "/account" }] };
+    const properties = sanitizeProviderProperties(privateSite, {
+      $current_url: `https://example.com/account?utm_source=${encodeURIComponent(value)}`,
+      utm_source: value, $initial_gclid: value,
+    });
+    expect(properties.$current_url).toBe("https://example.com/account");
+    expect(properties).not.toHaveProperty("utm_source");
+    expect(properties).not.toHaveProperty("$initial_gclid");
+  }));
+});

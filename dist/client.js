@@ -14,7 +14,7 @@ function normalizeAnalyticsPathname(pathname) {
   const withoutQuery = pathname.split(/[?#]/u, 1)[0] ?? "/";
   const withLeadingSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
   const collapsed = withLeadingSlash.replace(/\/{2,}/gu, "/");
-  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/+$/u, "") : collapsed;
+  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/$/u, "") : collapsed;
   return withoutTrailingSlash.slice(0, MAX_PATH_LENGTH) || "/";
 }
 function isAllowedAnalyticsHost(site, hostname) {
@@ -550,6 +550,97 @@ function installCommandCopiedProperties(input) {
   return installMethod && placement ? { install_method: installMethod, placement } : null;
 }
 
+// src/consent.ts
+var CONSENT_REGION_URL = "https://account.hraness.com/api/consent/region";
+var CONSENT_STORAGE_KEY = "hraness-consent-cookies-v1";
+var CONSENT_ACCEPTED_EVENT = "hraness-consent-accepted";
+
+class AnalyticsConsent {
+  environment;
+  regionAllows = false;
+  accepted = false;
+  denied = false;
+  started = false;
+  listeners = new Set;
+  constructor(environment) {
+    this.environment = environment;
+  }
+  allowed() {
+    return !this.denied && (this.accepted || this.regionAllows);
+  }
+  publish() {
+    for (const listener of this.listeners)
+      listener();
+  }
+  readChoice() {
+    let choice = null;
+    try {
+      choice = this.environment.readChoice();
+    } catch {}
+    this.accepted = choice === "accepted";
+    this.denied = choice !== null && choice !== "accepted";
+  }
+  start() {
+    if (this.started)
+      return;
+    this.started = true;
+    this.readChoice();
+    this.environment.listen(() => {
+      this.readChoice();
+      this.publish();
+    }, () => {
+      this.accepted = true;
+      this.denied = false;
+      this.publish();
+    });
+    if (this.accepted || this.denied)
+      return;
+    this.environment.requestRegion().then(async (response) => {
+      const body = await response.json();
+      this.regionAllows = response.ok && typeof body === "object" && body !== null && !Array.isArray(body) && Reflect.get(body, "required") === false;
+      this.publish();
+    }).catch(() => {
+      this.regionAllows = false;
+      this.publish();
+    });
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    this.start();
+    listener();
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+}
+var browserConsent;
+function getBrowserConsent() {
+  if (typeof window === "undefined")
+    return;
+  browserConsent ??= new AnalyticsConsent({
+    readChoice: () => window.localStorage.getItem(CONSENT_STORAGE_KEY),
+    requestRegion: () => fetch(CONSENT_REGION_URL, {
+      cache: "no-store",
+      credentials: "omit",
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(5000)
+    }),
+    listen: (changed, accepted) => {
+      const storageChanged = (event) => {
+        if (event.key === CONSENT_STORAGE_KEY || event.key === null)
+          changed();
+      };
+      window.addEventListener("storage", storageChanged);
+      window.addEventListener(CONSENT_ACCEPTED_EVENT, accepted);
+      return () => {
+        window.removeEventListener("storage", storageChanged);
+        window.removeEventListener(CONSENT_ACCEPTED_EVENT, accepted);
+      };
+    }
+  });
+  return browserConsent;
+}
+
 // src/traffic.ts
 var AI_SOURCES = [
   ["chatgpt", ["chatgpt.com", "chat.openai.com"]],
@@ -806,6 +897,7 @@ function createPostHogBeforeSend(site, resolveEvidence) {
       properties.$host = normalizeAnalyticsHostname($host).replace(/^www\./u, "");
     }
     properties.$current_url = sanitizeProviderProperties(site, { $current_url: rawCurrentUrl }, rawCurrentUrl, sensitiveAttributionSeen).$current_url ?? canonicalAnalyticsUrl(site, route.canonical_path);
+    properties.$pathname = route.canonical_path;
     properties.$process_person_profile = false;
     return {
       uuid: capture.uuid,
@@ -820,6 +912,7 @@ function createPostHogBeforeSend(site, resolveEvidence) {
   };
 }
 function createPostHogBrowserConfig(site, evidence, apiHost = DEFAULT_API_HOST) {
+  const beforeSend = createPostHogBeforeSend(site, () => evidence);
   return {
     api_host: apiHost,
     ui_host: apiHost.includes("eu.i.posthog.com") ? "https://eu.posthog.com" : "https://us.posthog.com",
@@ -862,13 +955,17 @@ function createPostHogBrowserConfig(site, evidence, apiHost = DEFAULT_API_HOST) 
       events_per_second: 2,
       events_burst_limit: 12
     },
-    before_send: createPostHogBeforeSend(site, () => evidence)
+    before_send: (capture) => getBrowserConsent()?.allowed() === true ? beforeSend(capture) : null
   };
 }
 function initializePostHogBrowser(options) {
   if (!isPostHogBrowserEligible(options)) {
     return false;
   }
+  const consent = getBrowserConsent();
+  consent?.start();
+  if (!consent?.allowed())
+    return false;
   if (activeSiteId === options.site.id) {
     return true;
   }
@@ -880,8 +977,30 @@ function initializePostHogBrowser(options) {
   activeSiteId = options.site.id;
   return true;
 }
+function observePostHogBrowser(options, ready) {
+  if (!isPostHogBrowserEligible(options))
+    return () => {};
+  let cleanup;
+  let started = false;
+  const removeConsent = getBrowserConsent()?.subscribe(() => {
+    if (initializePostHogBrowser(options)) {
+      if (!started) {
+        started = true;
+        cleanup = ready();
+      }
+    } else {
+      cleanup?.();
+      cleanup = undefined;
+      started = false;
+    }
+  });
+  return () => {
+    removeConsent?.();
+    cleanup?.();
+  };
+}
 function capturePostHogEvent(site, eventName, properties = {}, options = {}) {
-  if (activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
+  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
     return false;
   }
   if (options.href !== undefined && !parseAnalyticsLocation(site, options.href)) {
@@ -892,12 +1011,12 @@ function capturePostHogEvent(site, eventName, properties = {}, options = {}) {
     ...options.href ? { $current_url: options.href } : {}
   }, {
     ...options.transport ? { transport: options.transport } : {},
-    ...options.send_instantly !== undefined ? { send_instantly: options.send_instantly } : {}
+    ...options.transport === "sendBeacon" ? { send_instantly: true } : options.send_instantly !== undefined ? { send_instantly: options.send_instantly } : {}
   });
   return true;
 }
 function capturePostHogException(site, value, properties = {}) {
-  if (activeSiteId !== site.id) {
+  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id) {
     return false;
   }
   if (value && typeof value === "object") {
@@ -956,7 +1075,7 @@ function currentReferrer() {
   return typeof document === "undefined" ? "" : document.referrer;
 }
 function capturePostHogPageNotFound(site, input = {}) {
-  if (activeSiteId !== site.id) {
+  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id) {
     return false;
   }
   const properties = pageNotFoundProperties({
@@ -983,6 +1102,7 @@ function capturePostHogInstallCommandCopied(site, input) {
 }
 export {
   readDelegatedAnalyticsEvent,
+  observePostHogBrowser,
   isPostHogBrowserEligible,
   installPostHogExceptionCapture,
   installDelegatedPostHogCapture,
@@ -997,4 +1117,4 @@ export {
   capturePostHogCtaClicked
 };
 
-//# debugId=EA8155C78ACC3B8364756E2164756E21
+//# debugId=61606012780ED82564756E2164756E21

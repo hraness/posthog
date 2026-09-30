@@ -141,7 +141,8 @@ export async function capturePostHogEvent(
       distinctId: `server:${options.site.id}`,
       event: input.event,
       properties: {
-        ...sanitizeProviderProperties(options.site, normalizeAnalyticsProperties(input.properties)),
+        ...sanitizeProviderProperties(options.site, normalizeAnalyticsProperties(input.properties),
+          `https://${normalizeAnalyticsHostname(input.hostname)}${input.pathname ?? "/"}`),
         ...route,
         $process_person_profile: false,
       },

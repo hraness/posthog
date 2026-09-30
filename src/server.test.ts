@@ -35,6 +35,10 @@ test("server events enforce production, host, token and event allowlists before 
         canonical_path: "/", page_kind: "home", $process_person_profile: false,
       },
     });
+    expect(await capturePostHogEvent({ ...options, site: {
+      ...site, sensitivePaths: [{ match: "prefix", path: "/account" }],
+    } }, { ...input, pathname: "/account", properties: { utm_source: "private" } })).toBe(true);
+    expect(capture.mock.calls.at(-1)?.[0].properties).not.toHaveProperty("utm_source");
     capture.mockRejectedValueOnce(new Error("offline"));
     expect(await capturePostHogEvent(options, input)).toBe(false);
   } finally {

@@ -18,7 +18,7 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.2.0 from its GitHub
+> This repository does not publish the package to npm. Install version 0.3.0 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
@@ -28,7 +28,7 @@ Pin the Git source release with framework versions inside the supported peer ran
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "github:hraness/posthog#v0.2.0",
+    "@hraness/posthog": "github:hraness/posthog#v0.3.0",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -124,7 +124,7 @@ browser, React, server, and build-time adapters only where those runtimes exist.
 | Whether analytics may run under the site's policy | Memory-only cookieless state, anonymous profiles, Do Not Track, and disabled recording features |
 | Build-time source-map credentials | Production-only upload for an exact commit and supported PostHog UI host |
 
-The package does not infer product events, configure the PostHog project, decide consent, or turn an
+The package does not infer product events, configure the PostHog project, or turn an
 analytics property into trusted authorization state.
 
 ## Connect browser capture
@@ -248,7 +248,7 @@ observability failure does not change the request error path.
 | Server exception budget | Allows at most 30 exceptions per rolling minute and three occurrences per fingerprint. Provider failures are swallowed. |
 | Provider destination | Defaults to PostHog's US ingestion host. A caller that supplies `apiHost` owns approval of that destination. |
 
-Version 0.2.0 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
+Version 0.3.0 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
 Sites moving from 0.1.x send `analytics_schema_version: 2`.
 
 ## Test your site against real PostHog.js
@@ -359,8 +359,19 @@ delivered by this package.
 
 ### Does the package define conversions or consent policy?
 
-No. Those decisions belong to the consuming site. This package applies technical collection
-boundaries after the application decides analytics may run.
+Browser analytics uses the shared Accounts region policy. It starts before cookie acceptance when
+Accounts explicitly returns `required: false`; required, unknown, malformed, or unavailable region
+checks wait for acceptance. The check sends no credentials and times out after five seconds.
+An existing refusal remains off. PostHog keeps memory-only cookieless state in either case.
+
+The shared footer signals acceptance through `hraness-consent-accepted`, including when local
+storage is unavailable. Cross-tab changes to `hraness-consent-cookies-v1` are honored.
+Direct browser integrations use `observePostHogBrowser(options, ready)` to install listeners
+when analytics becomes available and remove them on cleanup. `initializePostHogBrowser` returns
+false while the shared policy is unresolved or blocked. Events from that time are discarded.
+
+Conversions and event schemas remain owned by the consuming site. The shared regional
+consent gate adds a collection boundary before browser analytics starts.
 
 ### Which Next.js versions are verified?
 

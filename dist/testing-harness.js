@@ -31,6 +31,7 @@ var pageDocument = {
 };
 var sent = [];
 var browserGlobals = {
+  localStorage: { getItem: () => "accepted" },
   document: pageDocument,
   location: pageLocation,
   navigator: {
@@ -62,7 +63,7 @@ for (const [name, value] of Object.entries(browserGlobals)) {
   });
 }
 var { posthog } = await import("posthog-js");
-var { createPostHogBrowserConfig } = await import("./client.js");
+var { createPostHogBrowserConfig, initializePostHogBrowser } = await import("./client.js");
 var received = [];
 var returned = [];
 var evidence = { href: firstScenario.href, referrer: firstScenario.referrer ?? "" };
@@ -71,7 +72,22 @@ var productionBeforeSend = config.before_send;
 if (typeof productionBeforeSend !== "function") {
   throw new Error("production config has no before_send function");
 }
-posthog.init(input.apiKey, {
+var originalInit = posthog.init.bind(posthog);
+posthog.init = (token, options, name) => originalInit(token, {
+  ...options,
+  capture_pageview: false,
+  capture_pageleave: false,
+  capture_performance: false,
+  disable_external_dependency_loading: true
+}, name);
+initializePostHogBrowser({
+  site: input.site,
+  apiKey: input.apiKey,
+  ...input.apiHost ? { apiHost: input.apiHost } : {},
+  evidence: { ...evidence, hostname: pageLocation.hostname, production: true }
+});
+posthog.init = originalInit;
+posthog.set_config({
   ...config,
   capture_pageview: false,
   capture_pageleave: false,
@@ -120,4 +136,4 @@ for (const scenario of input.scenarios) {
 process.stdout.write(JSON.stringify({ sent, received, returned }));
 process.exit(0);
 
-//# debugId=5B8F504B363A7CB764756E2164756E21
+//# debugId=987D3AB551FB636B64756E2164756E21

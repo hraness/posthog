@@ -31,7 +31,7 @@ export type PostHogSiteDefinition = Readonly<{
    */
   sensitivePaths?: readonly AnalyticsPathRule[];
   /**
-   * @deprecated Since 0.2.0 the query is always reduced to the campaign
+   * @deprecated Since 0.3.0 the query is always reduced to the campaign
    * attribution keep-list (`utm_*` and ad click IDs), so this option has no
    * effect. Use `sensitivePaths` to drop attribution on private routes.
    */
@@ -62,7 +62,7 @@ export function normalizeAnalyticsPathname(pathname: string): string {
   const withoutQuery = pathname.split(/[?#]/u, 1)[0] ?? "/";
   const withLeadingSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
   const collapsed = withLeadingSlash.replace(/\/{2,}/gu, "/");
-  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/+$/u, "") : collapsed;
+  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/$/u, "") : collapsed;
   return withoutTrailingSlash.slice(0, MAX_PATH_LENGTH) || "/";
 }
 

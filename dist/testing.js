@@ -18,7 +18,7 @@ function normalizeAnalyticsPathname(pathname) {
   const withoutQuery = pathname.split(/[?#]/u, 1)[0] ?? "/";
   const withLeadingSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
   const collapsed = withLeadingSlash.replace(/\/{2,}/gu, "/");
-  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/+$/u, "") : collapsed;
+  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/$/u, "") : collapsed;
   return withoutTrailingSlash.slice(0, MAX_PATH_LENGTH) || "/";
 }
 function isAllowedAnalyticsHost(site, hostname) {
@@ -591,6 +591,7 @@ function createPostHogBeforeSend(site, resolveEvidence) {
       properties.$host = normalizeAnalyticsHostname($host).replace(/^www\./u, "");
     }
     properties.$current_url = sanitizeProviderProperties(site, { $current_url: rawCurrentUrl }, rawCurrentUrl, sensitiveAttributionSeen).$current_url ?? canonicalAnalyticsUrl(site, route.canonical_path);
+    properties.$pathname = route.canonical_path;
     properties.$process_person_profile = false;
     return {
       uuid: capture.uuid,
@@ -839,4 +840,4 @@ export {
   HARNESS_API_KEY
 };
 
-//# debugId=004C8FC0DE16B75C64756E2164756E21
+//# debugId=FFE3D101E85409F764756E2164756E21
