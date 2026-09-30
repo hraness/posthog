@@ -35,7 +35,7 @@ var browserGlobals = {
   document: pageDocument,
   location: pageLocation,
   navigator: {
-    doNotTrack: null,
+    doNotTrack: input.doNotTrack ?? null,
     language: "en-US",
     languages: ["en-US"],
     onLine: true,
@@ -108,6 +108,8 @@ async function drain(expected) {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 for (const scenario of input.scenarios) {
+  if (scenario.doNotTrack !== undefined)
+    Reflect.set(navigator, "doNotTrack", scenario.doNotTrack);
   const next = new URL(scenario.href);
   pageLocation.href = next.href;
   pageDocument.URL = next.href;
@@ -137,4 +139,4 @@ for (const scenario of input.scenarios) {
 process.stdout.write(JSON.stringify({ sent, received, returned }));
 process.exit(0);
 
-//# debugId=2E951EF171C329EE64756E2164756E21
+//# debugId=4911B795481FB75364756E2164756E21

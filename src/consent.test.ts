@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import fc from "fast-check";
-import { AnalyticsConsent, installConsentTransport, type ConsentEnvironment } from "./consent";
+import { browserDoNotTrackEnabled, AnalyticsConsent, installConsentTransport, type ConsentEnvironment } from "./consent";
 
 function fixture(body: unknown = { required: false }, ok = true) {
   let choice: string | null = null;
@@ -213,5 +213,27 @@ test("unqualified providers fail closed before initialization", async () => {
   for (const version of [undefined, "1.434.5", "2.0.0"]) {
     const provider = { version, _send_request: () => {} };
     expect(installConsentTransport(provider, f.consent)).toBe(false);
+  }
+});
+
+test("current and legacy Do Not Track signals override accepted consent and transport", () => {
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  try {
+    for (const field of ["doNotTrack", "msDoNotTrack", "window"]) {
+      for (const enabled of ["1", "yes", 1]) {
+        Object.defineProperty(globalThis, "navigator", { configurable: true, value: field === "window" ? {} : { [field]: enabled } });
+        Object.defineProperty(globalThis, "window", { configurable: true, value: field === "window" ? { doNotTrack: enabled } : {} });
+        expect(browserDoNotTrackEnabled()).toBe(true);
+        const f = fixture(); f.consent.start(); f.accept();
+        expect(f.consent.allowed()).toBe(false);
+        expect(f.consent.requestSignal().aborted).toBe(true);
+      }
+    }
+  } finally {
+    if (previousNavigator) Object.defineProperty(globalThis, "navigator", previousNavigator);
+    else Reflect.deleteProperty(globalThis, "navigator");
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
   }
 });

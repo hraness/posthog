@@ -197,3 +197,20 @@ test("stable UUIDs reach actual SDK wire events across independent page loads", 
   expect(first[0]?.uuid).toBe(uuid);
   expect(reloaded[0]?.uuid).toBe(uuid);
 });
+
+for (const doNotTrack of ["1", "yes"]) {
+  test(`real cookieless SDK sends nothing with Do Not Track ${doNotTrack}`, () => {
+    const result = runPostHogHarness({ site, doNotTrack, scenarios: [{
+      href: "https://example.com/", captures: [{ event: "$pageview" }, { event: "cta clicked" }],
+    }] });
+    expect(result.sent).toEqual([]);
+  });
+}
+
+test("real SDK stops capture when Do Not Track changes after initialization", () => {
+  const result = runPostHogHarness({ site, scenarios: [
+    { href: "https://example.com/", captures: [{ event: "$pageview" }] },
+    { href: "https://example.com/", doNotTrack: "1", captures: [{ event: "$pageleave" }, { event: "cta clicked" }] },
+  ] });
+  expect(result.sent.map(event => event.event)).toEqual(["$pageview"]);
+});
