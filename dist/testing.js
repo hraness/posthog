@@ -471,6 +471,10 @@ class AnalyticsConsent {
       this.accepted = true;
       this.denied = false;
       this.publish();
+    }, () => {
+      this.accepted = false;
+      this.denied = true;
+      this.publish();
     });
     if (this.accepted || this.denied)
       return;
@@ -971,4 +975,4 @@ export {
   HARNESS_API_KEY
 };
 
-//# debugId=1B75907456B8497964756E2164756E21
+//# debugId=433912C59906187F64756E2164756E21

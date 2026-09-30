@@ -2,6 +2,7 @@
 export const CONSENT_REGION_URL = "https://account.hraness.com/api/consent/region";
 export const CONSENT_STORAGE_KEY = "hraness-consent-cookies-v1";
 export const CONSENT_ACCEPTED_EVENT = "hraness-consent-accepted";
+export const CONSENT_DECLINED_EVENT = "hraness-consent-declined";
 
 /** The SDK ignores respect_dnt in cookieless mode, so enforce it independently. */
 export function browserDoNotTrackEnabled(): boolean {
@@ -16,7 +17,7 @@ export function browserDoNotTrackEnabled(): boolean {
 export type ConsentEnvironment = Readonly<{
   readChoice: () => string | null;
   requestRegion: () => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
-  listen: (changed: () => void, accepted: () => void) => () => void;
+  listen: (changed: () => void, accepted: () => void, declined: () => void) => () => void;
 }>;
 
 /** A single page shares one region lookup, including simultaneous SDK callers. */
@@ -72,6 +73,11 @@ export class AnalyticsConsent {
       this.accepted = true;
       this.denied = false;
       this.publish();
+    }, () => {
+      // A same-page refusal must win even when persistence is unavailable.
+      this.accepted = false;
+      this.denied = true;
+      this.publish();
     });
     if (this.accepted || this.denied) return;
     void this.environment.requestRegion().then(async (response) => {
@@ -104,15 +110,17 @@ export function getBrowserConsent(): AnalyticsConsent | undefined {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(5_000),
     }),
-    listen: (changed, accepted) => {
+    listen: (changed, accepted, declined) => {
       const storageChanged = (event: StorageEvent) => {
         if (event.key === CONSENT_STORAGE_KEY || event.key === null) changed();
       };
       window.addEventListener("storage", storageChanged);
       window.addEventListener(CONSENT_ACCEPTED_EVENT, accepted);
+      window.addEventListener(CONSENT_DECLINED_EVENT, declined);
       return () => {
         window.removeEventListener("storage", storageChanged);
         window.removeEventListener(CONSENT_ACCEPTED_EVENT, accepted);
+        window.removeEventListener(CONSENT_DECLINED_EVENT, declined);
       };
     },
   });

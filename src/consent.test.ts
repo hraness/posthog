@@ -78,6 +78,43 @@ test("persisted acceptance starts immediately; refusal and cross-tab changes win
   expect(f.consent.allowed()).toBe(false);
 });
 
+test("same-page refusal aborts requests despite unavailable or stale storage", async () => {
+  for (const storedChoice of [null, "accepted", "unavailable"] as const) {
+    let accept = () => {};
+    let decline = () => {};
+    const consent = new AnalyticsConsent({
+      readChoice: () => {
+        if (storedChoice === "unavailable") throw new Error("Storage unavailable");
+        return storedChoice;
+      },
+      requestRegion: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ required: false }) }),
+      listen: (_changed, accepted, declined) => {
+        accept = accepted;
+        decline = declined;
+        return () => {};
+      },
+    });
+    const observed: boolean[] = [];
+    const remove = consent.subscribe(() => { observed.push(consent.allowed()); });
+    accept();
+    const pending = consent.requestSignal();
+    expect(pending.aborted).toBe(false);
+    decline();
+    expect(consent.allowed()).toBe(false);
+    expect(pending.aborted).toBe(true);
+    expect(observed.at(-1)).toBe(false);
+    // A region result arriving after refusal cannot grant permission again.
+    await Promise.resolve(); await Promise.resolve();
+    expect(consent.allowed()).toBe(false);
+    accept();
+    expect(consent.allowed()).toBe(true);
+    expect(consent.requestSignal().aborted).toBe(false);
+    expect(consent.requestSignal()).not.toBe(pending);
+    expect(pending.aborted).toBe(true);
+    remove();
+  }
+});
+
 test("all arbitrary region payloads require literal false in a successful object response", async () => {
   await fc.assert(fc.asyncProperty(fc.jsonValue(), fc.boolean(), async (body, ok) => {
     const f = fixture(body, ok);
