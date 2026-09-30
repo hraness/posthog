@@ -18,7 +18,7 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.3.3 from its GitHub
+> This repository does not publish the package to npm. Install version 0.3.4 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
@@ -28,7 +28,7 @@ Pin the Git source release with framework versions inside the supported peer ran
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "github:hraness/posthog#v0.3.3",
+    "@hraness/posthog": "github:hraness/posthog#v0.3.4",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -250,11 +250,23 @@ observability failure does not change the request error path.
 | Server exception budget | Allows at most 30 exceptions per rolling minute and three occurrences per fingerprint. Provider failures are swallowed. |
 | Provider destination | Defaults to PostHog's US ingestion host. A caller that supplies `apiHost` owns approval of that destination. |
 
-Version 0.3.3 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
+Version 0.3.4 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
 For a referrer-only site, set `attributionMode: "referrer_only"`. This removes campaign
 queries and properties on every route, including initial and session-entry values,
 and classifies traffic only from the referrer. The default `"campaign"` mode keeps
 allowlisted campaign attribution on public routes.
+
+Set `privacyMode: "minimal"` on your site definition when upgrading a site that
+previously discarded all query attribution. This mode removes every campaign
+query/property, including initial/session attribution, reduces owned and external
+referrers to origins, and restores PostHog's personal-data masking. Existing route
+rules and `unknownCanonicalPath` still control private/unknown path disclosure.
+The default `"standard"` mode retains the 0.3.1 attribution behavior; the deprecated
+`stripQueryAttribution` field remains ignored in that mode. List private routes
+in `sensitivePaths` when retaining attribution elsewhere.
+
+Browser events use immediate requests (`request_batching: false`), so an event
+accepted before a consent change cannot remain queued for a later batch flush.
 Sites moving from 0.1.x send `analytics_schema_version: 2`.
 
 ## Test your site against real PostHog.js

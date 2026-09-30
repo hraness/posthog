@@ -274,6 +274,8 @@ export function createPostHogBrowserConfig(
     persistence: "memory",
     cookieless_mode: "always",
     respect_dnt: true,
+    // Consent can change between capture and a batch flush; check it per event.
+    request_batching: false,
     cross_subdomain_cookie: false,
     disableDeviceModel: true,
     disable_capture_url_hashes: true,
@@ -282,7 +284,10 @@ export function createPostHogBrowserConfig(
     // posthog-js masks ad click IDs under this flag. before_send removes every
     // non-attribution query parameter and redacts email, token, code, key, and
     // secret values instead.
-    mask_personal_data_properties: false,
+    mask_personal_data_properties: site.privacyMode === "minimal",
+    ...(site.privacyMode === "minimal" ? {
+      custom_personal_data_properties: ["email", "token", "code", "key", "secret"],
+    } : {}),
     properties_string_max_length: 2_048,
     internal_or_test_user_hostname: null,
     rate_limiting: {

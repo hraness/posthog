@@ -145,6 +145,11 @@ test("contract accepts excluded private routes only when no request is sent", ()
   }).violations).toEqual([]);
 });
 
+test("real SDK honors minimal privacy with the production contract checker", () => {
+  const report = checkPostHogContract({ site: { ...site, privacyMode: "minimal" }, sensitivePath: "/auth/callback" });
+  expect(report.violations).toEqual([]);
+});
+
 test("real SDK honors referrer-only attribution on every route", () => {
   const report = checkPostHogContract({ site: { ...site, attributionMode: "referrer_only" }, sensitivePath: "/auth/callback" });
   expect(report.violations).toEqual([]);

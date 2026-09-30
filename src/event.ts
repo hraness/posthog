@@ -216,7 +216,7 @@ export function analyticsAttributionQuery(
   site: PostHogSiteDefinition,
   url: URL,
 ): string {
-  if (site.attributionMode === "referrer_only" || isSensitiveAnalyticsPath(site, url.pathname)) {
+  if (site.privacyMode === "minimal" || site.attributionMode === "referrer_only" || isSensitiveAnalyticsPath(site, url.pathname)) {
     return "";
   }
   const kept = new URLSearchParams();
@@ -245,6 +245,9 @@ function sanitizeUrlValue(
   stripAttribution: boolean,
 ): ProviderUrlResult {
   if (REFERRER_URL_KEYS.has(key)) {
+    if (site.privacyMode === "minimal") {
+      return { handled: true, value: redactSensitiveText(sanitizeThirdPartyUrl(value, true)) };
+    }
     if (value === DIRECT_REFERRER) {
       return { handled: true, value };
     }
@@ -310,7 +313,7 @@ function sanitizeProviderValue(
     const safe = attributionValue(value);
     return safe || undefined;
   }
-  if (PASSTHROUGH_PROPERTY_NAMES.has(key)) {
+  if (site.privacyMode !== "minimal" && PASSTHROUGH_PROPERTY_NAMES.has(key)) {
     if (typeof value === "string") {
       return value.slice(0, MAX_PROVIDER_PROPERTY_STRING_LENGTH);
     }
@@ -379,7 +382,7 @@ export function sanitizeProviderProperties(
 ): Record<string, unknown> {
   const context: SanitizeContext = {
     site,
-    sensitive: site.attributionMode === "referrer_only" || stripAttribution || isSensitiveProviderLocation(site, currentUrl),
+    sensitive: site.privacyMode === "minimal" || site.attributionMode === "referrer_only" || stripAttribution || isSensitiveProviderLocation(site, currentUrl),
     seen: new WeakSet<object>(),
   };
   const sanitized: Record<string, unknown> = {};

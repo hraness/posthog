@@ -24,6 +24,8 @@ export type PostHogSiteDefinition = Readonly<{
   routes: readonly AnalyticsRouteRule[];
   customEvents: readonly string[];
   delegatedEvents?: readonly string[];
+  /** Remove all campaign attribution and keep every referrer at origin scope. */
+  privacyMode?: "minimal" | "standard";
   /** If present, only these routes may send events. An empty list disables every route. */
   allowedPaths?: readonly AnalyticsPathRule[];
   /** Routes that never send events. Exclusion wins over allowedPaths. */

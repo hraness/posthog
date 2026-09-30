@@ -41,6 +41,7 @@ test("browser configuration disables replay, autocapture, identity, flags, and p
     persistence: "memory",
     cookieless_mode: "always",
     respect_dnt: true,
+    request_batching: false,
   });
 });
 
