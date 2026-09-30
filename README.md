@@ -18,7 +18,7 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.3.6 from its GitHub
+> This repository does not publish the package to npm. Install version 0.3.7 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
@@ -28,7 +28,7 @@ Pin the verified immutable GitHub Release tarball with framework versions inside
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "https://github.com/hraness/posthog/releases/download/v0.3.6/hraness-posthog-0.3.6.tgz",
+    "@hraness/posthog": "https://github.com/hraness/posthog/releases/download/v0.3.7/hraness-posthog-0.3.7.tgz",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -384,8 +384,10 @@ Accounts explicitly returns `required: false`; required, unknown, malformed, or 
 checks wait for acceptance. The check sends no credentials and times out after five seconds.
 An existing refusal remains off. PostHog keeps memory-only cookieless state in either case.
 
-The shared footer signals acceptance through `hraness-consent-accepted`, including when local
-storage is unavailable. Cross-tab changes to `hraness-consent-cookies-v1` are honored.
+The shared footer signals choices through `hraness-consent-accepted` and
+`hraness-consent-declined`, including when local storage is unavailable. Declining immediately
+blocks capture and aborts pending requests. Cross-tab changes to `hraness-consent-cookies-v1`
+are honored.
 Direct browser integrations use `observePostHogBrowser(options, ready)` to install listeners
 when analytics becomes available and remove them on cleanup. `initializePostHogBrowser` returns
 false while the shared policy is unresolved or blocked. Events from that time are discarded.

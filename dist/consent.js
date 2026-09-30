@@ -2,6 +2,7 @@
 var CONSENT_REGION_URL = "https://account.hraness.com/api/consent/region";
 var CONSENT_STORAGE_KEY = "hraness-consent-cookies-v1";
 var CONSENT_ACCEPTED_EVENT = "hraness-consent-accepted";
+var CONSENT_DECLINED_EVENT = "hraness-consent-declined";
 
 class AnalyticsConsent {
   regionAllows = false;
@@ -50,6 +51,10 @@ class AnalyticsConsent {
       this.accepted = true;
       this.denied = false;
       this.publish();
+    }, () => {
+      this.accepted = false;
+      this.denied = true;
+      this.publish();
     });
     if (this.accepted || this.denied)
       return;
@@ -83,16 +88,18 @@ function getBrowserConsent() {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(5000)
     }),
-    listen: (changed, accepted) => {
+    listen: (changed, accepted, declined) => {
       const storageChanged = (event) => {
         if (event.key === CONSENT_STORAGE_KEY || event.key === null)
           changed();
       };
       window.addEventListener("storage", storageChanged);
       window.addEventListener(CONSENT_ACCEPTED_EVENT, accepted);
+      window.addEventListener(CONSENT_DECLINED_EVENT, declined);
       return () => {
         window.removeEventListener("storage", storageChanged);
         window.removeEventListener(CONSENT_ACCEPTED_EVENT, accepted);
+        window.removeEventListener(CONSENT_DECLINED_EVENT, declined);
       };
     }
   });
@@ -158,8 +165,9 @@ export {
   getBrowserConsent,
   CONSENT_STORAGE_KEY,
   CONSENT_REGION_URL,
+  CONSENT_DECLINED_EVENT,
   CONSENT_ACCEPTED_EVENT,
   AnalyticsConsent
 };
 
-//# debugId=2DC031854EA29DEE64756E2164756E21
+//# debugId=660D93D3C1D8D30064756E2164756E21
