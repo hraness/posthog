@@ -17,7 +17,7 @@ This package owns product-neutral site and event schemas, route normalization, p
 
 The package currently declares no Hraness runtime dependency. Any future shared dependency must use a reviewed immutable release or full commit so consumers can upgrade independently. Do not connect development through sibling paths, Git submodules, or coordinated `main` workflows. Extract another shared package only after two concrete consumers need the same stable, product-neutral interface.
 
-The public exports separate pure data utilities from browser, React, Node, and build-time integrations. Root, `./site`, `./event`, and `./traffic` cannot import provider or framework runtimes. `./client` cannot import Node or build-time code. `./react` may add React to the browser surface. `./server` and `./next-config` stay outside browser dependency graphs.
+The public exports separate pure data utilities from browser, React, Node, and build-time integrations. Root, `./site`, `./event`, `./traffic`, and `./consent` cannot import provider or framework runtimes. `./consent` exports the shared regional consent controller for custom browser clients; the SDK imports that same module so the page retains one consent state. `./client` cannot import Node or build-time code. `./react` may add React to the browser surface. `./server` and `./next-config` stay outside browser dependency graphs.
 
 This package stays headless. Consumer interfaces may layer accessible primitives and product-owned layout without coupling UI packages to analytics. Direct compositions are development-only and must never enter published exports or production dependency graphs.
 

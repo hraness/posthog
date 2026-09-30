@@ -13,11 +13,12 @@ type BuildGroup = Readonly<{
 
 const groups: readonly BuildGroup[] = [
   {
-    entrypoints: ["src/site.ts", "src/event.ts", "src/traffic.ts"],
+    entrypoints: ["src/site.ts", "src/event.ts", "src/traffic.ts", "src/consent.ts"],
     target: "browser",
   },
   {
     entrypoints: ["src/client.ts"],
+    external: ["./consent*"],
     target: "browser",
     banner: CLIENT_DIRECTIVE,
   },
