@@ -18,7 +18,7 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.3.0 from its GitHub
+> This repository does not publish the package to npm. Install version 0.3.1 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
@@ -28,7 +28,7 @@ Pin the Git source release with framework versions inside the supported peer ran
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "github:hraness/posthog#v0.3.0",
+    "@hraness/posthog": "github:hraness/posthog#v0.3.1",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -406,3 +406,5 @@ bun run check
 The package is available under the [MIT License](LICENSE).
 
 Maintained by [Hraness](https://hraness.com).
+
+Private routes can opt out completely with `excludedPaths`. Use `allowedPaths` to limit analytics to a public section. Both accept `{ match: "exact" | "prefix", path: string }` rules; prefixes match path segments, exclusions win, and an empty allowlist disables all routes. The client checks both the live and captured URL before sending, including after SPA navigation. Server helpers use the same route policy. `sensitivePaths` only removes attribution; it does not exclude events.

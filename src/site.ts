@@ -24,6 +24,10 @@ export type PostHogSiteDefinition = Readonly<{
   routes: readonly AnalyticsRouteRule[];
   customEvents: readonly string[];
   delegatedEvents?: readonly string[];
+  /** If present, only these routes may send events. An empty list disables every route. */
+  allowedPaths?: readonly AnalyticsPathRule[];
+  /** Routes that never send events. Exclusion wins over allowedPaths. */
+  excludedPaths?: readonly AnalyticsPathRule[];
   /**
    * Routes whose whole query, campaign attribution included, is removed before
    * delivery: sign-in, auth callbacks, account, billing and checkout returns,
@@ -109,7 +113,23 @@ function ruleMatches(rule: AnalyticsPathRule, pathname: string): boolean {
   if (rule.match === "exact") {
     return pathname === rulePath;
   }
-  return pathname === rulePath || pathname.startsWith(`${rulePath}/`);
+  return rulePath === "/" || pathname === rulePath || pathname.startsWith(`${rulePath}/`);
+}
+
+function policyPathname(pathname: string): string | null {
+  try {
+    return normalizeAnalyticsPathname(decodeURIComponent(normalizeAnalyticsPathname(pathname)));
+  } catch {
+    return null;
+  }
+}
+
+/** Segment-aware route permission, checked independently from route classification. */
+export function isAllowedAnalyticsPath(site: PostHogSiteDefinition, pathname: string): boolean {
+  const normalized = policyPathname(pathname);
+  if (normalized === null) return false;
+  return !site.excludedPaths?.some(rule => ruleMatches(rule, normalized))
+    && (site.allowedPaths === undefined || site.allowedPaths.some(rule => ruleMatches(rule, normalized)));
 }
 
 function slugForRule(rule: AnalyticsRouteRule, pathname: string): string | undefined {
@@ -126,7 +146,7 @@ export function classifyAnalyticsRoute(
   location: string | URL | AnalyticsLocation,
 ): AnalyticsRouteContext | null {
   const parsed = parseAnalyticsLocation(site, location);
-  if (!parsed) {
+  if (!parsed || !isAllowedAnalyticsPath(site, parsed.pathname)) {
     return null;
   }
 
@@ -170,6 +190,7 @@ export function isSensitiveAnalyticsPath(
   site: PostHogSiteDefinition,
   pathname: string,
 ): boolean {
-  const normalized = normalizeAnalyticsPathname(pathname);
+  const normalized = policyPathname(pathname);
+  if (normalized === null) return true;
   return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
 }

@@ -53,7 +53,20 @@ function ruleMatches(rule, pathname) {
   if (rule.match === "exact") {
     return pathname === rulePath;
   }
-  return pathname === rulePath || pathname.startsWith(`${rulePath}/`);
+  return rulePath === "/" || pathname === rulePath || pathname.startsWith(`${rulePath}/`);
+}
+function policyPathname(pathname) {
+  try {
+    return normalizeAnalyticsPathname(decodeURIComponent(normalizeAnalyticsPathname(pathname)));
+  } catch {
+    return null;
+  }
+}
+function isAllowedAnalyticsPath(site, pathname) {
+  const normalized = policyPathname(pathname);
+  if (normalized === null)
+    return false;
+  return !site.excludedPaths?.some((rule) => ruleMatches(rule, normalized)) && (site.allowedPaths === undefined || site.allowedPaths.some((rule) => ruleMatches(rule, normalized)));
 }
 function slugForRule(rule, pathname) {
   if (!rule.captureSlug) {
@@ -65,7 +78,7 @@ function slugForRule(rule, pathname) {
 }
 function classifyAnalyticsRoute(site, location) {
   const parsed = parseAnalyticsLocation(site, location);
-  if (!parsed) {
+  if (!parsed || !isAllowedAnalyticsPath(site, parsed.pathname)) {
     return null;
   }
   const rule = site.routes.find((candidate) => ruleMatches(candidate, parsed.pathname));
@@ -87,7 +100,9 @@ function isAllowedCustomEvent(site, eventName) {
   return site.customEvents.includes(eventName);
 }
 function isSensitiveAnalyticsPath(site, pathname) {
-  const normalized = normalizeAnalyticsPathname(pathname);
+  const normalized = policyPathname(pathname);
+  if (normalized === null)
+    return true;
   return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
 }
 
@@ -553,12 +568,20 @@ var clientExceptionBudget = new ExceptionBudget({
   windowMs: 60000
 });
 var seenErrors = new WeakSet;
+function liveRouteAllowed(site) {
+  const href = typeof window === "undefined" || typeof window.location === "undefined" ? undefined : window.location.href;
+  return href === undefined || classifyAnalyticsRoute(site, href) !== null;
+}
 function allowedEvent(site, eventName) {
   return BUILT_IN_EVENTS.has(eventName) || isAllowedCustomEvent(site, eventName);
 }
 function createPostHogBeforeSend(site, resolveEvidence) {
   let sensitiveAttributionSeen = false;
   return (capture) => {
+    if (!liveRouteAllowed(site)) {
+      sensitiveAttributionSeen = true;
+      return null;
+    }
     if (!capture || !allowedEvent(site, capture.event)) {
       return null;
     }
@@ -567,9 +590,14 @@ function createPostHogBeforeSend(site, resolveEvidence) {
       return null;
     }
     const evidence = resolveEvidence();
+    if (!classifyAnalyticsRoute(site, evidence.href)) {
+      sensitiveAttributionSeen = true;
+      return null;
+    }
     const rawCurrentUrl = typeof capture.properties.$current_url === "string" ? capture.properties.$current_url : evidence.href;
     const route = classifyAnalyticsRoute(site, rawCurrentUrl);
     if (!route) {
+      sensitiveAttributionSeen = true;
       return null;
     }
     const rawReferrer = typeof capture.properties.$referrer === "string" ? capture.properties.$referrer : evidence.referrer;
@@ -579,7 +607,8 @@ function createPostHogBeforeSend(site, resolveEvidence) {
       if (typeof url !== "string")
         continue;
       try {
-        if (isSensitiveAnalyticsPath(site, new URL(url, `https://${site.canonicalDomain}`).pathname)) {
+        const pathname = new URL(url, `https://${site.canonicalDomain}`).pathname;
+        if (isSensitiveAnalyticsPath(site, pathname) || !isAllowedAnalyticsPath(site, pathname)) {
           sensitiveAttributionSeen = true;
         }
       } catch {}
@@ -718,8 +747,15 @@ function checkPostHogContract(options) {
     ]
   });
   const violations = [];
+  const receivedByUuid = new Map;
+  for (const value of result.received) {
+    if (value && typeof value === "object") {
+      const received = value;
+      receivedByUuid.set(received.uuid, received.properties ?? {});
+    }
+  }
   const publicEvents = result.sent.filter((event) => {
-    const url = propertyOf(event, "$current_url");
+    const url = receivedByUuid.get(event["uuid"])?.["$current_url"] ?? propertyOf(event, "$current_url");
     return typeof url === "string" && !url.includes(options.sensitivePath);
   });
   const sensitiveEvents = result.sent.filter((event) => !publicEvents.includes(event));
@@ -728,15 +764,11 @@ function checkPostHogContract(options) {
       violations.push(`${expected.event}: no request was sent`);
     }
   }
-  if (sensitiveEvents.length === 0) {
-    violations.push(`${options.sensitivePath}: no sensitive-path $pageview was sent`);
-  }
-  const receivedByUuid = new Map;
-  for (const value of result.received) {
-    if (value && typeof value === "object") {
-      const received = value;
-      receivedByUuid.set(received.uuid, received.properties ?? {});
-    }
+  if (isAllowedAnalyticsPath(site, options.sensitivePath)) {
+    if (sensitiveEvents.length === 0)
+      violations.push(`${options.sensitivePath}: no sensitive-path $pageview was sent`);
+  } else if (sensitiveEvents.length > 0) {
+    violations.push(`${options.sensitivePath}: excluded route sent events`);
   }
   for (const event of result.sent) {
     const label = event.event;
@@ -840,4 +872,4 @@ export {
   HARNESS_API_KEY
 };
 
-//# debugId=FFE3D101E85409F764756E2164756E21
+//# debugId=ECF60ACED47CD36364756E2164756E21

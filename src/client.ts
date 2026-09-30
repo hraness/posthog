@@ -24,6 +24,7 @@ import {
   canonicalAnalyticsUrl,
   classifyAnalyticsRoute,
   isAllowedAnalyticsHost,
+  isAllowedAnalyticsPath,
   isAllowedCustomEvent,
   isSensitiveAnalyticsPath,
   isAllowedDelegatedEvent,
@@ -136,12 +137,20 @@ function currentBrowserEvidence(): BrowserAnalyticsEvidence | null {
   };
 }
 
+function liveRouteAllowed(site: PostHogSiteDefinition): boolean {
+  const href = typeof window === "undefined" || typeof window.location === "undefined"
+    ? undefined : window.location.href;
+  return href === undefined || classifyAnalyticsRoute(site, href) !== null;
+}
+
 export function isPostHogBrowserEligible(options: PostHogBrowserOptions): boolean {
   const evidence = options.evidence ?? currentBrowserEvidence();
   return Boolean(
     evidence?.production
     && options.apiKey?.startsWith("phc_")
-    && isAllowedAnalyticsHost(options.site, evidence.hostname),
+    && isAllowedAnalyticsHost(options.site, evidence.hostname)
+    && classifyAnalyticsRoute(options.site, evidence.href) !== null
+    && liveRouteAllowed(options.site),
   );
 }
 
@@ -155,6 +164,7 @@ export function createPostHogBeforeSend(
 ): (capture: CaptureResult | null) => CaptureResult | null {
   let sensitiveAttributionSeen = false;
   return (capture) => {
+    if (!liveRouteAllowed(site)) { sensitiveAttributionSeen = true; return null; }
     if (!capture || !allowedEvent(site, capture.event)) {
       return null;
     }
@@ -166,11 +176,13 @@ export function createPostHogBeforeSend(
       return null;
     }
     const evidence = resolveEvidence();
+    if (!classifyAnalyticsRoute(site, evidence.href)) { sensitiveAttributionSeen = true; return null; }
     const rawCurrentUrl = typeof capture.properties.$current_url === "string"
       ? capture.properties.$current_url
       : evidence.href;
     const route = classifyAnalyticsRoute(site, rawCurrentUrl);
     if (!route) {
+      sensitiveAttributionSeen = true;
       return null;
     }
     const rawReferrer = typeof capture.properties.$referrer === "string"
@@ -184,7 +196,8 @@ export function createPostHogBeforeSend(
     for (const url of [rawCurrentUrl, capture.properties.$initial_current_url, capture.properties.$session_entry_url]) {
       if (typeof url !== "string") continue;
       try {
-        if (isSensitiveAnalyticsPath(site, new URL(url, `https://${site.canonicalDomain}`).pathname)) {
+        const pathname = new URL(url, `https://${site.canonicalDomain}`).pathname;
+        if (isSensitiveAnalyticsPath(site, pathname) || !isAllowedAnalyticsPath(site, pathname)) {
           sensitiveAttributionSeen = true;
         }
       } catch {
@@ -330,10 +343,10 @@ export function capturePostHogEvent(
   properties: unknown = {},
   options: Readonly<{ transport?: "fetch" | "sendBeacon"; send_instantly?: boolean; href?: string }> = {},
 ): boolean {
-  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
+  if (getBrowserConsent()?.allowed() !== true || !liveRouteAllowed(site) || activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
     return false;
   }
-  if (options.href !== undefined && !parseAnalyticsLocation(site, options.href)) {
+  if (options.href !== undefined && !classifyAnalyticsRoute(site, options.href)) {
     return false;
   }
   posthog.capture(eventName, {
@@ -352,7 +365,7 @@ export function capturePostHogException(
   value: unknown,
   properties: unknown = {},
 ): boolean {
-  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id) {
+  if (getBrowserConsent()?.allowed() !== true || !liveRouteAllowed(site) || activeSiteId !== site.id) {
     return false;
   }
   if (value && typeof value === "object") {
@@ -425,7 +438,7 @@ export function capturePostHogPageNotFound(
   site: PostHogSiteDefinition,
   input: Readonly<{ requestedPath?: string; referrer?: string }> = {},
 ): boolean {
-  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id) {
+  if (getBrowserConsent()?.allowed() !== true || !liveRouteAllowed(site) || activeSiteId !== site.id) {
     return false;
   }
   const properties = pageNotFoundProperties({
