@@ -21,6 +21,7 @@ import {
   normalizeAnalyticsHostname,
   type PostHogSiteDefinition,
 } from "./site.js";
+import { getBrowserConsent } from "./consent.js";
 import { classifyAnalyticsTraffic } from "./traffic.js";
 
 const BUILT_IN_EVENTS = new Set(["$pageview", "$pageleave", "$web_vitals", "$exception"]);
@@ -182,6 +183,7 @@ export function createPostHogBrowserConfig(
   evidence: Pick<BrowserAnalyticsEvidence, "href" | "referrer">,
   apiHost = DEFAULT_API_HOST,
 ): Partial<PostHogConfig> {
+  const beforeSend = createPostHogBeforeSend(site, () => evidence);
   return {
     api_host: apiHost,
     ui_host: apiHost.includes("eu.i.posthog.com") ? "https://eu.posthog.com" : "https://us.posthog.com",
@@ -225,7 +227,9 @@ export function createPostHogBrowserConfig(
       events_per_second: 2,
       events_burst_limit: 12,
     },
-    before_send: createPostHogBeforeSend(site, () => evidence),
+    before_send: (capture) => getBrowserConsent()?.allowed() === true
+      ? beforeSend(capture)
+      : null,
   };
 }
 
@@ -233,6 +237,9 @@ export function initializePostHogBrowser(options: PostHogBrowserOptions): boolea
   if (!isPostHogBrowserEligible(options)) {
     return false;
   }
+  const consent = getBrowserConsent();
+  consent?.start();
+  if (!consent?.allowed()) return false;
   if (activeSiteId === options.site.id) {
     return true;
   }
@@ -248,12 +255,32 @@ export function initializePostHogBrowser(options: PostHogBrowserOptions): boolea
   return true;
 }
 
+/** Subscribe before initialization so both React and direct SDK callers obey the same policy. */
+export function observePostHogBrowser(
+  options: PostHogBrowserOptions,
+  ready: () => (() => void) | undefined,
+): () => void {
+  if (!isPostHogBrowserEligible(options)) return () => {};
+  let cleanup: (() => void) | undefined;
+  let started = false;
+  const removeConsent = getBrowserConsent()?.subscribe(() => {
+    if (initializePostHogBrowser(options)) {
+      if (!started) { started = true; cleanup = ready(); }
+    } else {
+      cleanup?.();
+      cleanup = undefined;
+      started = false;
+    }
+  });
+  return () => { removeConsent?.(); cleanup?.(); };
+}
+
 export function capturePostHogEvent(
   site: PostHogSiteDefinition,
   eventName: string,
   properties: unknown = {},
 ): boolean {
-  if (activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
+  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
     return false;
   }
   posthog.capture(eventName, normalizeAnalyticsProperties(properties));
@@ -265,7 +292,7 @@ export function capturePostHogException(
   value: unknown,
   properties: unknown = {},
 ): boolean {
-  if (activeSiteId !== site.id) {
+  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id) {
     return false;
   }
   if (value && typeof value === "object") {

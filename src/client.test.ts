@@ -233,3 +233,53 @@ test("delegated links collapse owned routes and omit foreign paths", () => {
 test("delegated parsing is a no-op without a DOM", () => {
   expect(readDelegatedAnalyticsEvent(site, null)).toBeNull();
 });
+
+test("SDK entry points send no analytics before regional permission and stop after refusal", () => {
+  const result = execFileSync(process.execPath, ["--eval", `
+    import { posthog } from "posthog-js";
+    const events = new EventTarget();
+    let choice = null;
+    let resolveRegion;
+    const requests = [];
+    globalThis.window = {
+      localStorage: { getItem: () => choice },
+      addEventListener: (...args) => events.addEventListener(...args),
+      removeEventListener: (...args) => events.removeEventListener(...args),
+    };
+    globalThis.fetch = (url, options) => {
+      requests.push({ url, credentials: options.credentials });
+      return new Promise(resolve => { resolveRegion = resolve; });
+    };
+    let initialized = 0, captured = 0, ready = 0, cleaned = 0;
+    posthog.init = () => { initialized++; };
+    posthog.capture = () => { captured++; };
+    const client = await import(${JSON.stringify(import.meta.dir + "/client.ts")});
+    const site = ${JSON.stringify(site)};
+    const evidence = ${JSON.stringify(evidence)};
+    const options = { site, evidence, apiKey: "phc_public" };
+    const before = client.initializePostHogBrowser(options);
+    const dispose = client.observePostHogBrowser(options, () => { ready++; return () => { cleaned++; }; });
+    const blocked = client.capturePostHogEvent(site, "cta opened");
+    const pending = { initialized, captured, ready, before, blocked };
+    resolveRegion(new Response(JSON.stringify({ required: false })));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const allowed = client.capturePostHogEvent(site, "cta opened");
+    const config = client.createPostHogBrowserConfig(site, evidence);
+    const event = { uuid: "1", event: "$pageview", properties: { token: "phc_public" } };
+    const sends = config.before_send(event) !== null;
+    choice = "declined";
+    const storage = new Event("storage");
+    Object.defineProperty(storage, "key", { value: "hraness-consent-cookies-v1" });
+    events.dispatchEvent(storage);
+    const denied = client.capturePostHogEvent(site, "cta opened");
+    const deniedSend = config.before_send(event);
+    dispose();
+    console.log(JSON.stringify({ pending, initialized, captured, ready, cleaned, allowed, sends, denied, deniedSend, requests }));
+  `], { encoding: "utf8", timeout: 10_000 });
+  expect(JSON.parse(result)).toEqual({
+    pending: { initialized: 0, captured: 0, ready: 0, before: false, blocked: false },
+    initialized: 1, captured: 1, ready: 1, cleaned: 1,
+    allowed: true, sends: true, denied: false, deniedSend: null,
+    requests: [{ url: "https://account.hraness.com/api/consent/region", credentials: "omit" }],
+  });
+});
