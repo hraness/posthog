@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import {
   capturePostHogEvent,
   capturePostHogException,
+  capturePostHogPageNotFound,
   initializePostHogBrowser,
   installDelegatedPostHogCapture,
   installPostHogExceptionCapture
@@ -51,10 +52,20 @@ function PostHogEventReporter(props) {
   }, [apiHost, apiKey, eventName, properties, site]);
   return null;
 }
+function PostHogPageNotFound(props) {
+  const { apiHost, apiKey, site } = props;
+  useEffect(() => {
+    if (initialize({ apiHost, apiKey, site })) {
+      capturePostHogPageNotFound(site);
+    }
+  }, [apiHost, apiKey, site]);
+  return null;
+}
 export {
+  PostHogPageNotFound,
   PostHogExceptionReporter,
   PostHogEventReporter,
   PostHogAnalytics
 };
 
-//# debugId=CD53137435EEFC5D64756E2164756E21
+//# debugId=036042159910649A64756E2164756E21

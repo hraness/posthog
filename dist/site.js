@@ -1,5 +1,5 @@
 // src/site.ts
-var POSTHOG_SCHEMA_VERSION = 1;
+var POSTHOG_SCHEMA_VERSION = 2;
 var MAX_PATH_LENGTH = 512;
 var MAX_SLUG_LENGTH = 160;
 function normalizeAnalyticsHostname(hostname) {
@@ -80,10 +80,15 @@ function isAllowedCustomEvent(site, eventName) {
 function isAllowedDelegatedEvent(site, eventName) {
   return site.delegatedEvents?.includes(eventName) ?? false;
 }
+function isSensitiveAnalyticsPath(site, pathname) {
+  const normalized = normalizeAnalyticsPathname(pathname);
+  return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
+}
 export {
   parseAnalyticsLocation,
   normalizeAnalyticsPathname,
   normalizeAnalyticsHostname,
+  isSensitiveAnalyticsPath,
   isAllowedDelegatedEvent,
   isAllowedCustomEvent,
   isAllowedAnalyticsHost,
@@ -92,4 +97,4 @@ export {
   POSTHOG_SCHEMA_VERSION
 };
 
-//# debugId=AE5CCF5A003BD25464756E2164756E21
+//# debugId=F5382255073EE60764756E2164756E21

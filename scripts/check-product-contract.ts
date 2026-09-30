@@ -99,9 +99,9 @@ const proofSite = {
       captureSlug: true,
     },
   ],
-  customEvents: ["guide_opened"],
-  delegatedEvents: ["guide_opened"],
-  stripQueryAttribution: true,
+  customEvents: ["guide opened"],
+  delegatedEvents: ["guide opened"],
+  sensitivePaths: [{ match: "prefix", path: "/account" }],
   unknownCanonicalPath: "/not-found",
 } satisfies PostHogSiteDefinition;
 const proofOutput = classifyAnalyticsRoute(

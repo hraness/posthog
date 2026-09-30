@@ -113,11 +113,7 @@ test("before-send drops unknown events and decorates approved events for SEO ana
 
 test("attributes ChatGPT UTM pageviews when the referrer is unavailable", () => {
   const href = "https://example.com/?utm_source=chatgpt.com&utm_term=private";
-  const privacySafeSite = {
-    ...site,
-    stripQueryAttribution: true,
-  } satisfies PostHogSiteDefinition;
-  const beforeSend = createPostHogBeforeSend(privacySafeSite, () => ({
+  const beforeSend = createPostHogBeforeSend(site, () => ({
     href,
     referrer: "",
   }));
@@ -134,13 +130,13 @@ test("attributes ChatGPT UTM pageviews when the referrer is unavailable", () => 
   });
 
   expect(capture?.properties).toMatchObject({
-    $current_url: "https://example.com/",
+    $current_url: "https://example.com/?utm_source=chatgpt.com&utm_term=private",
+    $host: "example.com",
     canonical_path: "/",
     traffic_channel: "ai_referral",
     traffic_source: "chatgpt",
+    utm_term: "private",
   });
-  expect(capture?.properties).not.toHaveProperty("$utm_source");
-  expect(capture?.properties).not.toHaveProperty("utm_term");
 });
 
 test("delegated links collapse owned routes and omit foreign paths", () => {

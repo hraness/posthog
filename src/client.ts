@@ -6,10 +6,18 @@ import "posthog-js/dist/web-vitals.js";
 
 import {
   analyticsErrorFingerprint,
+  ctaClickedProperties,
   ExceptionBudget,
+  installCommandCopiedProperties,
   normalizeAnalyticsProperties,
+  outboundLinkOpenedProperties,
+  pageNotFoundProperties,
   sanitizeAnalyticsError,
   sanitizeProviderProperties,
+  STANDARD_ANALYTICS_EVENTS,
+  type AnalyticsInstallMethod,
+  type AnalyticsLinkKind,
+  type AnalyticsPlacement,
   type AnalyticsProperties,
 } from "./event.js";
 import {
@@ -17,13 +25,21 @@ import {
   classifyAnalyticsRoute,
   isAllowedAnalyticsHost,
   isAllowedCustomEvent,
+  isSensitiveAnalyticsPath,
   isAllowedDelegatedEvent,
   normalizeAnalyticsHostname,
+  parseAnalyticsLocation,
   type PostHogSiteDefinition,
 } from "./site.js";
 import { classifyAnalyticsTraffic } from "./traffic.js";
 
-const BUILT_IN_EVENTS = new Set(["$pageview", "$pageleave", "$web_vitals", "$exception"]);
+const BUILT_IN_EVENTS = new Set([
+  "$pageview",
+  "$pageleave",
+  "$web_vitals",
+  "$exception",
+  STANDARD_ANALYTICS_EVENTS.pageNotFound,
+]);
 const DEFAULT_API_HOST = "https://us.i.posthog.com";
 const clientExceptionBudget = new ExceptionBudget({
   totalLimit: 20,
@@ -69,12 +85,15 @@ export function readDelegatedAnalyticsEvent(
     return null;
   }
 
+  const { dataset } = element;
   const rawProperties: Record<string, unknown> = {
-    ...(element.dataset.analyticsKind
-      ? { target_kind: element.dataset.analyticsKind }
-      : {}),
-    ...(element.dataset.analyticsId
-      ? { target_id: element.dataset.analyticsId }
+    ...(dataset.analyticsKind ? { target_kind: dataset.analyticsKind } : {}),
+    ...(dataset.analyticsId ? { target_id: dataset.analyticsId } : {}),
+    ...(dataset.analyticsCta ? { cta: dataset.analyticsCta } : {}),
+    ...(dataset.analyticsPlacement ? { placement: dataset.analyticsPlacement } : {}),
+    ...(dataset.analyticsLinkKind ? { link_kind: dataset.analyticsLinkKind } : {}),
+    ...(dataset.analyticsInstallMethod
+      ? { install_method: dataset.analyticsInstallMethod }
       : {}),
   };
   if (typeof HTMLAnchorElement !== "undefined" && element instanceof HTMLAnchorElement) {
@@ -85,7 +104,7 @@ export function readDelegatedAnalyticsEvent(
       const targetUrl = new URL(element.href, base);
       if (targetUrl.protocol === "http:" || targetUrl.protocol === "https:") {
         const targetHost = normalizeAnalyticsHostname(targetUrl.hostname);
-        rawProperties.target_host = targetHost;
+        rawProperties.target_host = targetHost.replace(/^www\./u, "");
         if (isAllowedAnalyticsHost(site, targetHost)) {
           const route = classifyAnalyticsRoute(site, targetUrl);
           if (route) {
@@ -133,6 +152,7 @@ export function createPostHogBeforeSend(
   site: PostHogSiteDefinition,
   resolveEvidence: () => Pick<BrowserAnalyticsEvidence, "href" | "referrer">,
 ): (capture: CaptureResult | null) => CaptureResult | null {
+  let sensitiveAttributionSeen = false;
   return (capture) => {
     if (!capture || !allowedEvent(site, capture.event)) {
       return null;
@@ -156,12 +176,38 @@ export function createPostHogBeforeSend(
       ? capture.properties.$referrer
       : evidence.referrer;
     const traffic = classifyAnalyticsTraffic(site, rawReferrer, rawCurrentUrl);
-    const properties = sanitizeProviderProperties(site, capture.properties);
+    const location = parseAnalyticsLocation(site, rawCurrentUrl);
+    // Scrub values in place. Rebuilding from a short allowlist loses $host,
+    // $raw_user_agent, $cookieless_mode, and session properties, and PostHog
+    // then drops or merges the event.
+    for (const url of [rawCurrentUrl, capture.properties.$initial_current_url, capture.properties.$session_entry_url]) {
+      if (typeof url !== "string") continue;
+      try {
+        if (isSensitiveAnalyticsPath(site, new URL(url, `https://${site.canonicalDomain}`).pathname)) {
+          sensitiveAttributionSeen = true;
+        }
+      } catch {
+        // Malformed provider URLs are removed by the sanitizer.
+      }
+    }
+    // Memory persistence can carry a private landing page's campaign into a
+    // later public navigation. Once observed, discard attribution for this
+    // browser instance, including initial and session-entry URL queries.
+    const properties = sanitizeProviderProperties(site, capture.properties, rawCurrentUrl, sensitiveAttributionSeen);
     // PostHog derives the batch api_key from this required transport property.
     // Preserve the already-validated public project token after generic strings
     // are redacted so ingestion can still attribute the event to its project.
     properties.token = projectToken;
-    properties.$current_url = canonicalAnalyticsUrl(site, route.canonical_path);
+    const $host = location?.hostname;
+    if ($host) {
+      properties.$host = normalizeAnalyticsHostname($host).replace(/^www\./u, "");
+    }
+    properties.$current_url = sanitizeProviderProperties(
+      site,
+      { $current_url: rawCurrentUrl },
+      rawCurrentUrl,
+      sensitiveAttributionSeen,
+    ).$current_url ?? canonicalAnalyticsUrl(site, route.canonical_path);
     properties.$process_person_profile = false;
 
     return {
@@ -217,8 +263,10 @@ export function createPostHogBrowserConfig(
     disable_capture_url_hashes: true,
     mask_all_text: true,
     mask_all_element_attributes: true,
-    mask_personal_data_properties: true,
-    custom_personal_data_properties: ["email", "token", "code", "key", "secret"],
+    // posthog-js masks ad click IDs under this flag. before_send removes every
+    // non-attribution query parameter and redacts email, token, code, key, and
+    // secret values instead.
+    mask_personal_data_properties: false,
     properties_string_max_length: 2_048,
     internal_or_test_user_hostname: null,
     rate_limiting: {
@@ -252,11 +300,21 @@ export function capturePostHogEvent(
   site: PostHogSiteDefinition,
   eventName: string,
   properties: unknown = {},
+  options: Readonly<{ transport?: "fetch" | "sendBeacon"; send_instantly?: boolean; href?: string }> = {},
 ): boolean {
   if (activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
     return false;
   }
-  posthog.capture(eventName, normalizeAnalyticsProperties(properties));
+  if (options.href !== undefined && !parseAnalyticsLocation(site, options.href)) {
+    return false;
+  }
+  posthog.capture(eventName, {
+    ...normalizeAnalyticsProperties(properties),
+    ...(options.href ? { $current_url: options.href } : {}),
+  }, {
+    ...(options.transport ? { transport: options.transport } : {}),
+    ...(options.send_instantly !== undefined ? { send_instantly: options.send_instantly } : {}),
+  });
   return true;
 }
 
@@ -282,7 +340,7 @@ export function capturePostHogException(
   posthog.captureException(error, {
     ...normalizeAnalyticsProperties(properties),
     error_fingerprint: fingerprint,
-    error_surface: "browser",
+    error_surface: "client",
   });
   return true;
 }
@@ -321,3 +379,73 @@ export function installDelegatedPostHogCapture(site: PostHogSiteDefinition): () 
 }
 
 export type { AnalyticsProperties };
+
+function currentPathname(): string | null {
+  return typeof window === "undefined" ? null : window.location.pathname;
+}
+
+function currentReferrer(): string {
+  return typeof document === "undefined" ? "" : document.referrer;
+}
+
+/**
+ * Sends `page not found` once per call with the normalized requested path and
+ * the referrer host. Call it once per 404 render.
+ */
+export function capturePostHogPageNotFound(
+  site: PostHogSiteDefinition,
+  input: Readonly<{ requestedPath?: string; referrer?: string }> = {},
+): boolean {
+  if (activeSiteId !== site.id) {
+    return false;
+  }
+  const properties = pageNotFoundProperties({
+    requestedPath: input.requestedPath ?? currentPathname(),
+    referrer: input.referrer ?? currentReferrer(),
+  });
+  if (!properties) {
+    return false;
+  }
+  posthog.capture(STANDARD_ANALYTICS_EVENTS.pageNotFound, properties);
+  return true;
+}
+
+function captureStandardEvent(
+  site: PostHogSiteDefinition,
+  eventName: string,
+  properties: AnalyticsProperties | null,
+): boolean {
+  return properties !== null && capturePostHogEvent(site, eventName, properties);
+}
+
+/** Sends `cta clicked {cta, placement, target_host?}` when declared in `customEvents`. */
+export function capturePostHogCtaClicked(
+  site: PostHogSiteDefinition,
+  input: Readonly<{ cta: string; placement: AnalyticsPlacement; targetHost?: string }>,
+): boolean {
+  return captureStandardEvent(site, STANDARD_ANALYTICS_EVENTS.ctaClicked, ctaClickedProperties(input));
+}
+
+/** Sends `outbound link opened {target_host, placement, link_kind?}` when declared. */
+export function capturePostHogOutboundLinkOpened(
+  site: PostHogSiteDefinition,
+  input: Readonly<{ targetHost: string; placement: AnalyticsPlacement; linkKind?: AnalyticsLinkKind }>,
+): boolean {
+  return captureStandardEvent(
+    site,
+    STANDARD_ANALYTICS_EVENTS.outboundLinkOpened,
+    outboundLinkOpenedProperties(input),
+  );
+}
+
+/** Sends `install command copied {install_method, placement}` when declared. */
+export function capturePostHogInstallCommandCopied(
+  site: PostHogSiteDefinition,
+  input: Readonly<{ installMethod: AnalyticsInstallMethod; placement: AnalyticsPlacement }>,
+): boolean {
+  return captureStandardEvent(
+    site,
+    STANDARD_ANALYTICS_EVENTS.installCommandCopied,
+    installCommandCopiedProperties(input),
+  );
+}

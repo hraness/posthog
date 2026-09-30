@@ -2,6 +2,7 @@ import {
   canonicalAnalyticsUrl,
   classifyAnalyticsRoute,
   isAllowedAnalyticsHost,
+  isSensitiveAnalyticsPath,
   normalizeAnalyticsPathname,
   type PostHogSiteDefinition,
 } from "./site.js";
@@ -28,39 +29,91 @@ const CURRENT_URL_KEYS = new Set([
   "url.full",
 ]);
 
-const QUERY_ATTRIBUTION_PROPERTY_NAMES = new Set([
-  "_kx",
-  "campaign_params",
-  "dclid",
-  "epik",
-  "fbclid",
-  "gad_source",
-  "gbraid",
+/**
+ * Campaign parameters kept as event properties and as the only query
+ * parameters of an owned `$current_url` (portfolio observability standard,
+ * version 2). Everything else in a query is removed.
+ */
+export const ANALYTICS_ATTRIBUTION_PARAMETERS = [
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "utm_id",
   "gclid",
-  "gclsrc",
-  "igshid",
-  "irclid",
-  "li_fat_id",
-  "mc_cid",
+  "gbraid",
+  "wbraid",
+  "gad_source",
+  "fbclid",
   "msclkid",
-  "qclid",
-  "rdt_cid",
-  "sccid",
   "ttclid",
   "twclid",
-  "utm_campaign",
-  "utm_content",
-  "utm_medium",
-  "utm_source",
-  "utm_term",
-  "wbraid",
+  "li_fat_id",
+  "igshid",
+  "dclid",
+  "epik",
+  "rdt_cid",
+  "sccid",
+  "irclid",
+  "mc_cid",
+] as const;
+
+const ATTRIBUTION_PARAMETER_NAMES: ReadonlySet<string> = new Set(ANALYTICS_ATTRIBUTION_PARAMETERS);
+
+// Campaign-shaped provider properties outside the keep-list. Klaviyo `_kx`
+// and similar values can point to one person, so they never leave the page.
+const DROPPED_CAMPAIGN_PROPERTY_NAMES: ReadonlySet<string> = new Set([
+  "_kx",
+  "campaign_params",
+  "gclsrc",
+  "qclid",
+  "ref",
+]);
+
+// posthog-js masks these names when `mask_personal_data_properties` is on.
+// That flag also masks ad click IDs, so the package turns it off and redacts
+// the same names here instead.
+const PERSONAL_DATA_PROPERTY_NAMES: ReadonlySet<string> = new Set([
+  "code",
+  "email",
+  "key",
+  "password",
+  "secret",
+  "token",
+  "state",
+  "access_token",
+  "refresh_token",
+  "id_token",
+  "session_token",
+  "api_key",
+  "authorization",
+]);
+
+// Provider identity and transport values the cookieless hash, sessions, and
+// device breakdowns depend on. They pass through without text redaction.
+const PASSTHROUGH_PROPERTY_NAMES: ReadonlySet<string> = new Set([
+  "$cookieless_mode",
+  "$device_id",
+  "$insert_id",
+  "$lib",
+  "$lib_version",
+  "$pageview_id",
+  "$prev_pageview_id",
+  "$raw_user_agent",
+  "$session_id",
+  "$window_id",
+  "distinct_id",
 ]);
 
 const REFERRER_URL_KEYS = new Set([
   "$referrer",
   "$initial_referrer",
+  "$session_entry_referrer",
   "referrer",
 ]);
+
+const DIRECT_REFERRER = "$direct";
 
 function normalizedProviderPropertyName(key: string): string {
   return key.toLowerCase()
@@ -74,10 +127,16 @@ function isProviderPathnameKey(key: string): boolean {
   );
 }
 
-function isQueryAttributionKey(key: string): boolean {
-  return QUERY_ATTRIBUTION_PROPERTY_NAMES.has(
-    normalizedProviderPropertyName(key),
-  );
+export function isAnalyticsAttributionProperty(key: string): boolean {
+  return ATTRIBUTION_PARAMETER_NAMES.has(normalizedProviderPropertyName(key));
+}
+
+function isDroppedCampaignProperty(key: string): boolean {
+  return DROPPED_CAMPAIGN_PROPERTY_NAMES.has(normalizedProviderPropertyName(key));
+}
+
+function isPersonalDataProperty(key: string): boolean {
+  return PERSONAL_DATA_PROPERTY_NAMES.has(normalizedProviderPropertyName(key).replace(/-/gu, "_"));
 }
 
 function cleanPropertyString(value: string): string {
@@ -145,50 +204,124 @@ function sanitizeThirdPartyUrl(value: string, originOnly: boolean): string {
   }
 }
 
+function attributionValue(value: string): string {
+  return cleanPropertyString(redactSensitiveText(value));
+}
+
+/**
+ * Returns `?name=value` for the keep-listed campaign parameters of `url`, in
+ * keep-list order, or an empty string. Sensitive paths never keep a query.
+ */
+export function analyticsAttributionQuery(
+  site: PostHogSiteDefinition,
+  url: URL,
+): string {
+  if (isSensitiveAnalyticsPath(site, url.pathname)) {
+    return "";
+  }
+  const kept = new URLSearchParams();
+  for (const name of ANALYTICS_ATTRIBUTION_PARAMETERS) {
+    const value = url.searchParams.get(name);
+    if (value) {
+      const safe = attributionValue(value);
+      if (safe) kept.set(name, safe);
+    }
+  }
+  const query = kept.toString();
+  return query ? `?${query}` : "";
+}
+
+function ownedCanonicalUrl(site: PostHogSiteDefinition, parsed: URL): string {
+  const route = classifyAnalyticsRoute(site, parsed);
+  return redactSensitiveText(canonicalAnalyticsUrl(site, route?.canonical_path ?? "/"));
+}
+
+type ProviderUrlResult = Readonly<{ handled: false }> | Readonly<{ handled: true; value: string }>;
+
 function sanitizeUrlValue(
   site: PostHogSiteDefinition,
   key: string,
   value: string,
-): string {
+  stripAttribution: boolean,
+): ProviderUrlResult {
   if (REFERRER_URL_KEYS.has(key)) {
-    return sanitizeThirdPartyUrl(value, true);
+    if (value === DIRECT_REFERRER) {
+      return { handled: true, value };
+    }
+    try {
+      const parsed = new URL(value);
+      if (isAllowedAnalyticsHost(site, parsed.hostname)) {
+        return { handled: true, value: ownedCanonicalUrl(site, parsed) };
+      }
+      return { handled: true, value: redactSensitiveText(sanitizeThirdPartyUrl(parsed.href, true)) };
+    } catch {
+      return { handled: true, value: "" };
+    }
   }
   if (isProviderPathnameKey(key)) {
     try {
       const parsed = new URL(value, `https://${site.canonicalDomain}`);
-      if (!isAllowedAnalyticsHost(site, parsed.hostname)) return "";
-      return classifyAnalyticsRoute(site, parsed)?.canonical_path ?? "/";
+      if (!isAllowedAnalyticsHost(site, parsed.hostname)) return { handled: true, value: "" };
+      return {
+        handled: true,
+        value: redactSensitiveText(classifyAnalyticsRoute(site, parsed)?.canonical_path ?? "/"),
+      };
     } catch {
-      return "";
+      return { handled: true, value: "" };
     }
   }
   if (!CURRENT_URL_KEYS.has(key)) {
-    return value;
+    return { handled: false };
   }
   try {
     const parsed = new URL(value, `https://${site.canonicalDomain}`);
     if (!isAllowedAnalyticsHost(site, parsed.hostname)) {
-      return sanitizeThirdPartyUrl(parsed.href, true);
+      return { handled: true, value: redactSensitiveText(sanitizeThirdPartyUrl(parsed.href, true)) };
     }
-    const route = classifyAnalyticsRoute(site, parsed);
-    return canonicalAnalyticsUrl(site, route?.canonical_path ?? "/");
+    return {
+      handled: true,
+      value: `${ownedCanonicalUrl(site, parsed)}${stripAttribution ? "" : analyticsAttributionQuery(site, parsed)}`,
+    };
   } catch {
-    return "";
+    return { handled: true, value: "" };
   }
 }
 
+type SanitizeContext = Readonly<{
+  site: PostHogSiteDefinition;
+  sensitive: boolean;
+  seen: WeakSet<object>;
+}>;
+
 function sanitizeProviderValue(
-  site: PostHogSiteDefinition,
+  context: SanitizeContext,
   key: string,
   value: unknown,
   depth: number,
-  seen: WeakSet<object>,
 ): unknown {
-  if (site.stripQueryAttribution === true && isQueryAttributionKey(key)) {
+  const { site } = context;
+  if (isDroppedCampaignProperty(key)) {
     return undefined;
   }
+  if (isAnalyticsAttributionProperty(key)) {
+    if (context.sensitive || typeof value !== "string") {
+      return undefined;
+    }
+    const safe = attributionValue(value);
+    return safe || undefined;
+  }
+  if (PASSTHROUGH_PROPERTY_NAMES.has(key)) {
+    if (typeof value === "string") {
+      return value.slice(0, MAX_PROVIDER_PROPERTY_STRING_LENGTH);
+    }
+    return typeof value === "boolean" || typeof value === "number" ? value : undefined;
+  }
+  if (isPersonalDataProperty(key) && value !== null && value !== undefined) {
+    return typeof value === "boolean" ? value : "[redacted]";
+  }
   if (typeof value === "string") {
-    return redactSensitiveText(sanitizeUrlValue(site, key, value))
+    const url = sanitizeUrlValue(site, key, value, context.sensitive);
+    return (url.handled ? url.value : redactSensitiveText(value))
       .slice(0, MAX_PROVIDER_PROPERTY_STRING_LENGTH);
   }
   if (value === null || typeof value === "boolean" || typeof value === "number") {
@@ -197,16 +330,16 @@ function sanitizeProviderValue(
   if (depth >= 5 || !value || typeof value !== "object") {
     return undefined;
   }
-  if (seen.has(value)) {
+  if (context.seen.has(value)) {
     return undefined;
   }
-  seen.add(value);
+  context.seen.add(value);
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeProviderValue(site, key, item, depth + 1, seen));
+    return value.map((item) => sanitizeProviderValue(context, key, item, depth + 1));
   }
   const result: Record<string, unknown> = {};
   for (const [nestedKey, nestedValue] of Object.entries(value)) {
-    const safeValue = sanitizeProviderValue(site, nestedKey, nestedValue, depth + 1, seen);
+    const safeValue = sanitizeProviderValue(context, nestedKey, nestedValue, depth + 1);
     if (safeValue !== undefined) {
       result[nestedKey] = safeValue;
     }
@@ -214,14 +347,44 @@ function sanitizeProviderValue(
   return result;
 }
 
+function isSensitiveProviderLocation(
+  site: PostHogSiteDefinition,
+  currentUrl: unknown,
+): boolean {
+  if (typeof currentUrl !== "string") {
+    return false;
+  }
+  try {
+    return isSensitiveAnalyticsPath(
+      site,
+      new URL(currentUrl, `https://${site.canonicalDomain}`).pathname,
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Scrubs a provider-shaped property object without rebuilding it from a short
+ * allowlist: identity, session, device, and campaign properties survive, while
+ * queries, fragments, emails, credentials, and personal-data names do not.
+ * `currentUrl` decides whether campaign properties belong to a sensitive path;
+ * it defaults to the object's own `$current_url`.
+ */
 export function sanitizeProviderProperties(
   site: PostHogSiteDefinition,
   properties: Readonly<Record<string, unknown>>,
+  currentUrl: unknown = properties["$current_url"],
+  stripAttribution = false,
 ): Record<string, unknown> {
-  const seen = new WeakSet<object>();
+  const context: SanitizeContext = {
+    site,
+    sensitive: stripAttribution || isSensitiveProviderLocation(site, currentUrl),
+    seen: new WeakSet<object>(),
+  };
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(properties)) {
-    const safeValue = sanitizeProviderValue(site, key, value, 0, seen);
+    const safeValue = sanitizeProviderValue(context, key, value, 0);
     if (safeValue !== undefined) {
       sanitized[key] = safeValue;
     }
@@ -229,7 +392,7 @@ export function sanitizeProviderProperties(
   return sanitized;
 }
 
-function redactSensitiveText(value: string): string {
+export function redactSensitiveText(value: string): string {
   return value
     .replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]")
@@ -238,7 +401,7 @@ function redactSensitiveText(value: string): string {
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]")
     .replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1")
     .replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1")
-    .replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|secret|password)=([^\s&]+)/giu, "$1=[redacted]");
+    .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=([^\s&]+)/giu, "$1=[redacted]");
 }
 
 export function sanitizeAnalyticsError(value: unknown): Error {
@@ -311,4 +474,150 @@ export class ExceptionBudget {
     this.#byFingerprint.set(fingerprint, matching);
     return true;
   }
+}
+
+/** Standard placements for `cta clicked`, `outbound link opened`, and friends. */
+export const ANALYTICS_PLACEMENTS = [
+  "hero",
+  "nav",
+  "footer",
+  "inline",
+  "pricing",
+  "docs",
+  "modal",
+  "sticky",
+  "not_found",
+] as const;
+export type AnalyticsPlacement = (typeof ANALYTICS_PLACEMENTS)[number];
+
+export const ANALYTICS_INSTALL_METHODS = [
+  "brew",
+  "curl",
+  "npm",
+  "bun",
+  "pip",
+  "go",
+  "cargo",
+  "other",
+] as const;
+export type AnalyticsInstallMethod = (typeof ANALYTICS_INSTALL_METHODS)[number];
+
+export const ANALYTICS_LINK_KINDS = ["github", "docs", "social", "portfolio", "other"] as const;
+export type AnalyticsLinkKind = (typeof ANALYTICS_LINK_KINDS)[number];
+
+/** Event names defined by the portfolio observability standard, version 2. */
+export const STANDARD_ANALYTICS_EVENTS = {
+  pageNotFound: "page not found",
+  ctaClicked: "cta clicked",
+  outboundLinkOpened: "outbound link opened",
+  installCommandCopied: "install command copied",
+  downloadStarted: "download started",
+  emailSignupViewed: "email signup viewed",
+  emailSignupSubmitted: "email signup submitted",
+  emailSignupRequestAccepted: "email signup request accepted",
+  checkoutStarted: "checkout started",
+  purchaseCompleted: "purchase completed",
+} as const;
+
+const EVENT_NAME_PATTERN = /^[a-z][a-z0-9]*(?: [a-z0-9]+)*$/u;
+const SNAKE_CASE_ID_PATTERN = /^[a-z][a-z0-9_]*$/u;
+const MAX_EVENT_NAME_LENGTH = 64;
+
+/** True when a custom event name follows the lowercase `object verb` naming rule. */
+export function isStandardAnalyticsEventName(eventName: string): boolean {
+  return eventName.length <= MAX_EVENT_NAME_LENGTH && EVENT_NAME_PATTERN.test(eventName);
+}
+
+function snakeCaseId(value: unknown): string | null {
+  return typeof value === "string"
+    && value.length <= MAX_PROPERTY_KEY_LENGTH
+    && SNAKE_CASE_ID_PATTERN.test(value)
+    ? value
+    : null;
+}
+
+function oneOf<T extends string>(values: readonly T[], value: unknown): T | null {
+  return typeof value === "string" && (values as readonly string[]).includes(value)
+    ? value as T
+    : null;
+}
+
+function hostOf(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+  try {
+    const parsed = value.includes("://") ? new URL(value) : new URL(`https://${value}`);
+    const host = parsed.hostname.toLowerCase().replace(/\.$/u, "").replace(/^www\./u, "");
+    return host && host.length <= MAX_PROPERTY_STRING_LENGTH ? host : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Properties for `page not found`: the normalized requested path with no query
+ * or fragment (256 characters max, emails and credentials redacted) and the
+ * referrer host. Returns `null` for input that cannot form a path.
+ */
+export function pageNotFoundProperties(
+  input: Readonly<{ requestedPath: unknown; referrer?: unknown }>,
+): AnalyticsProperties | null {
+  if (typeof input.requestedPath !== "string") {
+    return null;
+  }
+  let pathname = input.requestedPath;
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(pathname)) {
+      pathname = new URL(pathname).pathname;
+    }
+  } catch {
+    return null;
+  }
+  const requestedPath = cleanPropertyString(
+    redactSensitiveText(normalizeAnalyticsPathname(pathname)),
+  );
+  const referrerHost = input.referrer === "$direct" ? null : hostOf(input.referrer);
+  return {
+    requested_path: requestedPath || "/",
+    ...(referrerHost ? { referrer_host: referrerHost } : {}),
+  };
+}
+
+/** Properties for `cta clicked`; `null` unless `cta` is a snake_case ID and `placement` is standard. */
+export function ctaClickedProperties(
+  input: Readonly<{ cta: unknown; placement: unknown; targetHost?: unknown }>,
+): AnalyticsProperties | null {
+  const cta = snakeCaseId(input.cta);
+  const placement = oneOf(ANALYTICS_PLACEMENTS, input.placement);
+  if (!cta || !placement) {
+    return null;
+  }
+  const targetHost = hostOf(input.targetHost);
+  return { cta, placement, ...(targetHost ? { target_host: targetHost } : {}) };
+}
+
+/** Properties for `outbound link opened`; `null` without a valid host and standard placement. */
+export function outboundLinkOpenedProperties(
+  input: Readonly<{ targetHost: unknown; placement: unknown; linkKind?: unknown }>,
+): AnalyticsProperties | null {
+  const targetHost = hostOf(input.targetHost);
+  const placement = oneOf(ANALYTICS_PLACEMENTS, input.placement);
+  if (!targetHost || !placement) {
+    return null;
+  }
+  const linkKind = input.linkKind === undefined ? null : oneOf(ANALYTICS_LINK_KINDS, input.linkKind);
+  if (input.linkKind !== undefined && !linkKind) {
+    return null;
+  }
+  return { target_host: targetHost, placement, ...(linkKind ? { link_kind: linkKind } : {}) };
+}
+
+/** Properties for `install command copied`; never the raw command text. */
+export function installCommandCopiedProperties(
+  input: Readonly<{ installMethod: unknown; placement: unknown }>,
+): AnalyticsProperties | null {
+  const installMethod = oneOf(ANALYTICS_INSTALL_METHODS, input.installMethod);
+  const placement = oneOf(ANALYTICS_PLACEMENTS, input.placement);
+  return installMethod && placement ? { install_method: installMethod, placement } : null;
 }

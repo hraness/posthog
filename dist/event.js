@@ -1,5 +1,5 @@
 // src/site.ts
-var POSTHOG_SCHEMA_VERSION = 1;
+var POSTHOG_SCHEMA_VERSION = 2;
 var MAX_PATH_LENGTH = 512;
 var MAX_SLUG_LENGTH = 160;
 function normalizeAnalyticsHostname(hostname) {
@@ -80,6 +80,10 @@ function isAllowedCustomEvent(site, eventName) {
 function isAllowedDelegatedEvent(site, eventName) {
   return site.delegatedEvents?.includes(eventName) ?? false;
 }
+function isSensitiveAnalyticsPath(site, pathname) {
+  const normalized = normalizeAnalyticsPathname(pathname);
+  return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
+}
 
 // src/event.ts
 var MAX_PROPERTY_COUNT = 32;
@@ -98,46 +102,87 @@ var CURRENT_URL_KEYS = new Set([
   "href",
   "url.full"
 ]);
-var QUERY_ATTRIBUTION_PROPERTY_NAMES = new Set([
-  "_kx",
-  "campaign_params",
-  "dclid",
-  "epik",
-  "fbclid",
-  "gad_source",
-  "gbraid",
+var ANALYTICS_ATTRIBUTION_PARAMETERS = [
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "utm_id",
   "gclid",
-  "gclsrc",
-  "igshid",
-  "irclid",
-  "li_fat_id",
-  "mc_cid",
+  "gbraid",
+  "wbraid",
+  "gad_source",
+  "fbclid",
   "msclkid",
-  "qclid",
-  "rdt_cid",
-  "sccid",
   "ttclid",
   "twclid",
-  "utm_campaign",
-  "utm_content",
-  "utm_medium",
-  "utm_source",
-  "utm_term",
-  "wbraid"
+  "li_fat_id",
+  "igshid",
+  "dclid",
+  "epik",
+  "rdt_cid",
+  "sccid",
+  "irclid",
+  "mc_cid"
+];
+var ATTRIBUTION_PARAMETER_NAMES = new Set(ANALYTICS_ATTRIBUTION_PARAMETERS);
+var DROPPED_CAMPAIGN_PROPERTY_NAMES = new Set([
+  "_kx",
+  "campaign_params",
+  "gclsrc",
+  "qclid",
+  "ref"
+]);
+var PERSONAL_DATA_PROPERTY_NAMES = new Set([
+  "code",
+  "email",
+  "key",
+  "password",
+  "secret",
+  "token",
+  "state",
+  "access_token",
+  "refresh_token",
+  "id_token",
+  "session_token",
+  "api_key",
+  "authorization"
+]);
+var PASSTHROUGH_PROPERTY_NAMES = new Set([
+  "$cookieless_mode",
+  "$device_id",
+  "$insert_id",
+  "$lib",
+  "$lib_version",
+  "$pageview_id",
+  "$prev_pageview_id",
+  "$raw_user_agent",
+  "$session_id",
+  "$window_id",
+  "distinct_id"
 ]);
 var REFERRER_URL_KEYS = new Set([
   "$referrer",
   "$initial_referrer",
+  "$session_entry_referrer",
   "referrer"
 ]);
+var DIRECT_REFERRER = "$direct";
 function normalizedProviderPropertyName(key) {
   return key.toLowerCase().replace(/^\$/u, "").replace(/^(?:initial|session_entry)_/u, "");
 }
 function isProviderPathnameKey(key) {
   return /^(?:\$)?(?:(?:initial|session_entry|prev_pageview)_)?pathname$/u.test(key.toLowerCase());
 }
-function isQueryAttributionKey(key) {
-  return QUERY_ATTRIBUTION_PROPERTY_NAMES.has(normalizedProviderPropertyName(key));
+function isAnalyticsAttributionProperty(key) {
+  return ATTRIBUTION_PARAMETER_NAMES.has(normalizedProviderPropertyName(key));
+}
+function isDroppedCampaignProperty(key) {
+  return DROPPED_CAMPAIGN_PROPERTY_NAMES.has(normalizedProviderPropertyName(key));
+}
+function isPersonalDataProperty(key) {
+  return PERSONAL_DATA_PROPERTY_NAMES.has(normalizedProviderPropertyName(key).replace(/-/gu, "_"));
 }
 function cleanPropertyString(value) {
   return Array.from(value, (character) => {
@@ -192,40 +237,97 @@ function sanitizeThirdPartyUrl(value, originOnly) {
     return "";
   }
 }
-function sanitizeUrlValue(site, key, value) {
+function attributionValue(value) {
+  return cleanPropertyString(redactSensitiveText(value));
+}
+function analyticsAttributionQuery(site, url) {
+  if (isSensitiveAnalyticsPath(site, url.pathname)) {
+    return "";
+  }
+  const kept = new URLSearchParams;
+  for (const name of ANALYTICS_ATTRIBUTION_PARAMETERS) {
+    const value = url.searchParams.get(name);
+    if (value) {
+      const safe = attributionValue(value);
+      if (safe)
+        kept.set(name, safe);
+    }
+  }
+  const query = kept.toString();
+  return query ? `?${query}` : "";
+}
+function ownedCanonicalUrl(site, parsed) {
+  const route = classifyAnalyticsRoute(site, parsed);
+  return redactSensitiveText(canonicalAnalyticsUrl(site, route?.canonical_path ?? "/"));
+}
+function sanitizeUrlValue(site, key, value, stripAttribution) {
   if (REFERRER_URL_KEYS.has(key)) {
-    return sanitizeThirdPartyUrl(value, true);
+    if (value === DIRECT_REFERRER) {
+      return { handled: true, value };
+    }
+    try {
+      const parsed = new URL(value);
+      if (isAllowedAnalyticsHost(site, parsed.hostname)) {
+        return { handled: true, value: ownedCanonicalUrl(site, parsed) };
+      }
+      return { handled: true, value: redactSensitiveText(sanitizeThirdPartyUrl(parsed.href, true)) };
+    } catch {
+      return { handled: true, value: "" };
+    }
   }
   if (isProviderPathnameKey(key)) {
     try {
       const parsed = new URL(value, `https://${site.canonicalDomain}`);
       if (!isAllowedAnalyticsHost(site, parsed.hostname))
-        return "";
-      return classifyAnalyticsRoute(site, parsed)?.canonical_path ?? "/";
+        return { handled: true, value: "" };
+      return {
+        handled: true,
+        value: redactSensitiveText(classifyAnalyticsRoute(site, parsed)?.canonical_path ?? "/")
+      };
     } catch {
-      return "";
+      return { handled: true, value: "" };
     }
   }
   if (!CURRENT_URL_KEYS.has(key)) {
-    return value;
+    return { handled: false };
   }
   try {
     const parsed = new URL(value, `https://${site.canonicalDomain}`);
     if (!isAllowedAnalyticsHost(site, parsed.hostname)) {
-      return sanitizeThirdPartyUrl(parsed.href, true);
+      return { handled: true, value: redactSensitiveText(sanitizeThirdPartyUrl(parsed.href, true)) };
     }
-    const route = classifyAnalyticsRoute(site, parsed);
-    return canonicalAnalyticsUrl(site, route?.canonical_path ?? "/");
+    return {
+      handled: true,
+      value: `${ownedCanonicalUrl(site, parsed)}${stripAttribution ? "" : analyticsAttributionQuery(site, parsed)}`
+    };
   } catch {
-    return "";
+    return { handled: true, value: "" };
   }
 }
-function sanitizeProviderValue(site, key, value, depth, seen) {
-  if (site.stripQueryAttribution === true && isQueryAttributionKey(key)) {
+function sanitizeProviderValue(context, key, value, depth) {
+  const { site } = context;
+  if (isDroppedCampaignProperty(key)) {
     return;
   }
+  if (isAnalyticsAttributionProperty(key)) {
+    if (context.sensitive || typeof value !== "string") {
+      return;
+    }
+    const safe = attributionValue(value);
+    return safe || undefined;
+  }
+  if (PASSTHROUGH_PROPERTY_NAMES.has(key)) {
+    if (typeof value === "string") {
+      return value.slice(0, MAX_PROVIDER_PROPERTY_STRING_LENGTH);
+    }
+    return typeof value === "boolean" || typeof value === "number" ? value : undefined;
+  }
+  if (isPersonalDataProperty(key) && value !== null && value !== undefined) {
+    return typeof value === "boolean" ? value : "[redacted]";
+  }
   if (typeof value === "string") {
-    return redactSensitiveText(sanitizeUrlValue(site, key, value)).slice(0, MAX_PROVIDER_PROPERTY_STRING_LENGTH);
+    const url = sanitizeUrlValue(site, key, value, context.sensitive);
+    return (url.handled ? url.value : redactSensitiveText(value)).slice(0, MAX_PROVIDER_PROPERTY_STRING_LENGTH);
   }
   if (value === null || typeof value === "boolean" || typeof value === "number") {
     return value;
@@ -233,27 +335,41 @@ function sanitizeProviderValue(site, key, value, depth, seen) {
   if (depth >= 5 || !value || typeof value !== "object") {
     return;
   }
-  if (seen.has(value)) {
+  if (context.seen.has(value)) {
     return;
   }
-  seen.add(value);
+  context.seen.add(value);
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeProviderValue(site, key, item, depth + 1, seen));
+    return value.map((item) => sanitizeProviderValue(context, key, item, depth + 1));
   }
   const result = {};
   for (const [nestedKey, nestedValue] of Object.entries(value)) {
-    const safeValue = sanitizeProviderValue(site, nestedKey, nestedValue, depth + 1, seen);
+    const safeValue = sanitizeProviderValue(context, nestedKey, nestedValue, depth + 1);
     if (safeValue !== undefined) {
       result[nestedKey] = safeValue;
     }
   }
   return result;
 }
-function sanitizeProviderProperties(site, properties) {
-  const seen = new WeakSet;
+function isSensitiveProviderLocation(site, currentUrl) {
+  if (typeof currentUrl !== "string") {
+    return false;
+  }
+  try {
+    return isSensitiveAnalyticsPath(site, new URL(currentUrl, `https://${site.canonicalDomain}`).pathname);
+  } catch {
+    return false;
+  }
+}
+function sanitizeProviderProperties(site, properties, currentUrl = properties["$current_url"], stripAttribution = false) {
+  const context = {
+    site,
+    sensitive: stripAttribution || isSensitiveProviderLocation(site, currentUrl),
+    seen: new WeakSet
+  };
   const sanitized = {};
   for (const [key, value] of Object.entries(properties)) {
-    const safeValue = sanitizeProviderValue(site, key, value, 0, seen);
+    const safeValue = sanitizeProviderValue(context, key, value, 0);
     if (safeValue !== undefined) {
       sanitized[key] = safeValue;
     }
@@ -261,7 +377,7 @@ function sanitizeProviderProperties(site, properties) {
   return sanitized;
 }
 function redactSensitiveText(value) {
-  return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s?#]+)@/giu, "$1[credential]@").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|auth(?:orization)?|secret|password)=([^\s&]+)/giu, "$1=[redacted]");
+  return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s?#]+)@/giu, "$1[credential]@").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=([^\s&]+)/giu, "$1=[redacted]");
 }
 function sanitizeAnalyticsError(value) {
   try {
@@ -330,12 +446,128 @@ class ExceptionBudget {
     return true;
   }
 }
+var ANALYTICS_PLACEMENTS = [
+  "hero",
+  "nav",
+  "footer",
+  "inline",
+  "pricing",
+  "docs",
+  "modal",
+  "sticky",
+  "not_found"
+];
+var ANALYTICS_INSTALL_METHODS = [
+  "brew",
+  "curl",
+  "npm",
+  "bun",
+  "pip",
+  "go",
+  "cargo",
+  "other"
+];
+var ANALYTICS_LINK_KINDS = ["github", "docs", "social", "portfolio", "other"];
+var STANDARD_ANALYTICS_EVENTS = {
+  pageNotFound: "page not found",
+  ctaClicked: "cta clicked",
+  outboundLinkOpened: "outbound link opened",
+  installCommandCopied: "install command copied",
+  downloadStarted: "download started",
+  emailSignupViewed: "email signup viewed",
+  emailSignupSubmitted: "email signup submitted",
+  emailSignupRequestAccepted: "email signup request accepted",
+  checkoutStarted: "checkout started",
+  purchaseCompleted: "purchase completed"
+};
+var EVENT_NAME_PATTERN = /^[a-z][a-z0-9]*(?: [a-z0-9]+)*$/u;
+var SNAKE_CASE_ID_PATTERN = /^[a-z][a-z0-9_]*$/u;
+var MAX_EVENT_NAME_LENGTH = 64;
+function isStandardAnalyticsEventName(eventName) {
+  return eventName.length <= MAX_EVENT_NAME_LENGTH && EVENT_NAME_PATTERN.test(eventName);
+}
+function snakeCaseId(value) {
+  return typeof value === "string" && value.length <= MAX_PROPERTY_KEY_LENGTH && SNAKE_CASE_ID_PATTERN.test(value) ? value : null;
+}
+function oneOf(values, value) {
+  return typeof value === "string" && values.includes(value) ? value : null;
+}
+function hostOf(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+  try {
+    const parsed = value.includes("://") ? new URL(value) : new URL(`https://${value}`);
+    const host = parsed.hostname.toLowerCase().replace(/\.$/u, "").replace(/^www\./u, "");
+    return host && host.length <= MAX_PROPERTY_STRING_LENGTH ? host : null;
+  } catch {
+    return null;
+  }
+}
+function pageNotFoundProperties(input) {
+  if (typeof input.requestedPath !== "string") {
+    return null;
+  }
+  let pathname = input.requestedPath;
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(pathname)) {
+      pathname = new URL(pathname).pathname;
+    }
+  } catch {
+    return null;
+  }
+  const requestedPath = cleanPropertyString(redactSensitiveText(normalizeAnalyticsPathname(pathname)));
+  const referrerHost = input.referrer === "$direct" ? null : hostOf(input.referrer);
+  return {
+    requested_path: requestedPath || "/",
+    ...referrerHost ? { referrer_host: referrerHost } : {}
+  };
+}
+function ctaClickedProperties(input) {
+  const cta = snakeCaseId(input.cta);
+  const placement = oneOf(ANALYTICS_PLACEMENTS, input.placement);
+  if (!cta || !placement) {
+    return null;
+  }
+  const targetHost = hostOf(input.targetHost);
+  return { cta, placement, ...targetHost ? { target_host: targetHost } : {} };
+}
+function outboundLinkOpenedProperties(input) {
+  const targetHost = hostOf(input.targetHost);
+  const placement = oneOf(ANALYTICS_PLACEMENTS, input.placement);
+  if (!targetHost || !placement) {
+    return null;
+  }
+  const linkKind = input.linkKind === undefined ? null : oneOf(ANALYTICS_LINK_KINDS, input.linkKind);
+  if (input.linkKind !== undefined && !linkKind) {
+    return null;
+  }
+  return { target_host: targetHost, placement, ...linkKind ? { link_kind: linkKind } : {} };
+}
+function installCommandCopiedProperties(input) {
+  const installMethod = oneOf(ANALYTICS_INSTALL_METHODS, input.installMethod);
+  const placement = oneOf(ANALYTICS_PLACEMENTS, input.placement);
+  return installMethod && placement ? { install_method: installMethod, placement } : null;
+}
 export {
   sanitizeProviderProperties,
   sanitizeAnalyticsError,
+  redactSensitiveText,
+  pageNotFoundProperties,
+  outboundLinkOpenedProperties,
   normalizeAnalyticsProperties,
+  isStandardAnalyticsEventName,
+  isAnalyticsAttributionProperty,
+  installCommandCopiedProperties,
+  ctaClickedProperties,
   analyticsErrorFingerprint,
-  ExceptionBudget
+  analyticsAttributionQuery,
+  STANDARD_ANALYTICS_EVENTS,
+  ExceptionBudget,
+  ANALYTICS_PLACEMENTS,
+  ANALYTICS_LINK_KINDS,
+  ANALYTICS_INSTALL_METHODS,
+  ANALYTICS_ATTRIBUTION_PARAMETERS
 };
 
-//# debugId=F4E9A6E7E7C1B04D64756E2164756E21
+//# debugId=1535B68542B31A8C64756E2164756E21

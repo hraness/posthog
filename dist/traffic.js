@@ -1,5 +1,5 @@
 // src/site.ts
-var POSTHOG_SCHEMA_VERSION = 1;
+var POSTHOG_SCHEMA_VERSION = 2;
 var MAX_PATH_LENGTH = 512;
 var MAX_SLUG_LENGTH = 160;
 function normalizeAnalyticsHostname(hostname) {
@@ -79,6 +79,10 @@ function isAllowedCustomEvent(site, eventName) {
 }
 function isAllowedDelegatedEvent(site, eventName) {
   return site.delegatedEvents?.includes(eventName) ?? false;
+}
+function isSensitiveAnalyticsPath(site, pathname) {
+  const normalized = normalizeAnalyticsPathname(pathname);
+  return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
 }
 
 // src/traffic.ts
@@ -229,4 +233,4 @@ export {
   classifyAnalyticsTraffic
 };
 
-//# debugId=43B3200CF855D27F64756E2164756E21
+//# debugId=7CA51071EF85095B64756E2164756E21

@@ -10,15 +10,15 @@
 `@hraness/posthog` connects a Next.js app to PostHog from one site definition that lists your hosts,
 routes, and allowed events. The browser adapter runs only on approved production hosts and sends
 page views, page leaves, Web Vitals, exceptions, and the custom events you declare. It keeps its
-state in memory instead of cookies, strips URL queries, and redacts recognized credentials and email
-addresses. Separate adapters report server errors, with limits on repeats, and upload source maps
+state in memory instead of cookies, keeps only campaign parameters in URLs, and redacts recognized
+credentials and email addresses. Separate adapters report server errors, with limits on repeats, and upload source maps
 for production builds. The route, event, and traffic helpers run without importing PostHog.
 
 Your app still decides its hosts, routes, events, what counts as a conversion, the PostHog project,
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.1.3 from its GitHub
+> This repository does not publish the package to npm. Install version 0.2.0 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
@@ -28,7 +28,7 @@ Pin the Git source release with framework versions inside the supported peer ran
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "github:hraness/posthog#v0.1.3",
+    "@hraness/posthog": "github:hraness/posthog#v0.2.0",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -58,9 +58,9 @@ export const analyticsSite = {
       captureSlug: true,
     },
   ],
-  customEvents: ["guide_opened"],
-  delegatedEvents: ["guide_opened"],
-  stripQueryAttribution: true,
+  customEvents: ["guide opened"],
+  delegatedEvents: ["guide opened"],
+  sensitivePaths: [{ match: "prefix", path: "/account" }],
   unknownCanonicalPath: "/not-found",
 } satisfies PostHogSiteDefinition;
 ```
@@ -84,7 +84,7 @@ console.log(
 
 ```json
 {
-  "analytics_schema_version": 1,
+  "analytics_schema_version": 2,
   "site_id": "docs",
   "canonical_domain": "docs.example.com",
   "canonical_path": "/guides/install",
@@ -105,8 +105,9 @@ The route check above loads no PostHog code, writes no cookie, and sends nothing
 | `@hraness/posthog/traffic` | Provider-neutral | Direct, internal, search, AI, social, and referral attribution | An `AnalyticsTrafficContext` |
 | `@hraness/posthog/client` | Browser | Eligible PostHog.js initialization and approved event capture | `true` when accepted, `false` when inert |
 | `@hraness/posthog/react` | React client boundary | Browser initialization, delegated clicks, and exception reporting | Components that render no interface |
-| `@hraness/posthog/server` | Node | Bounded Next.js request-error reporting | An `Instrumentation.onRequestError` callback |
+| `@hraness/posthog/server` | Node | Next.js request errors and anonymous server events | An error callback or a delivery result |
 | `@hraness/posthog/next-config` | Build time | Exact production source-map upload | The wrapped config or the original config unchanged |
+| `@hraness/posthog/testing` | Node or Bun test runner | Running real PostHog.js events through your site's production config | Decoded outgoing requests and a list of contract violations |
 
 Keep each import on its intended side of the application boundary. The root export is pure. Import
 browser, React, server, and build-time adapters only where those runtimes exist.
@@ -153,7 +154,7 @@ Capture a declared event from application code:
 ```ts
 import { capturePostHogEvent } from "@hraness/posthog/client";
 
-const accepted = capturePostHogEvent(analyticsSite, "guide_opened", {
+const accepted = capturePostHogEvent(analyticsSite, "guide opened", {
   guide_kind: "reference",
 });
 ```
@@ -161,13 +162,32 @@ const accepted = capturePostHogEvent(analyticsSite, "guide_opened", {
 `accepted` is `false` until the matching site is initialized or when the event name is not in
 `customEvents`.
 
+The client export also sends the shared event names with checked properties. Each helper returns
+`false` unless the event is in `customEvents` and every property is valid:
+
+```ts
+import {
+  capturePostHogCtaClicked,
+  capturePostHogInstallCommandCopied,
+  capturePostHogOutboundLinkOpened,
+} from "@hraness/posthog/client";
+
+capturePostHogCtaClicked(analyticsSite, { cta: "start_trial", placement: "hero" });
+capturePostHogInstallCommandCopied(analyticsSite, { installMethod: "brew", placement: "hero" });
+capturePostHogOutboundLinkOpened(analyticsSite, { targetHost: "github.com", placement: "footer" });
+```
+
+Mount `PostHogPageNotFound` from `@hraness/posthog/react` in your 404 page. It sends one
+`page not found` event with the requested path, without its query or fragment, and the referring
+host.
+
 For a declared delegated event, semantic HTML can carry the bounded event name and two normalized
 properties. The React adapter installs and removes the click listener.
 
 ```html
 <a
   href="/guides/install"
-  data-analytics-event="guide_opened"
+  data-analytics-event="guide opened"
   data-analytics-kind="navigation"
   data-analytics-id="install-guide"
 >
@@ -177,6 +197,23 @@ properties. The React adapter installs and removes the click listener.
 
 Only an event listed in `delegatedEvents` is accepted. Owned links contribute a canonical path;
 foreign links contribute a hostname but not their path or query.
+
+## Send server events
+
+Use the server export from a payment webhook or another trusted server handler. It requires
+production, an allowed served hostname, and an event in `customEvents`. It sends a fixed
+anonymous server identity, removes sensitive properties, and returns `false` on delivery failure.
+Do not pass customer identifiers or user input.
+
+```ts
+import { capturePostHogEvent } from "@hraness/posthog/server";
+
+await capturePostHogEvent({ site: analyticsSite, apiKey: process.env.NEXT_PUBLIC_POSTHOG_KEY }, {
+  event: "purchase completed",
+  hostname: "example.com",
+  properties: { product: "guide", price_tier: "standard", currency: "USD", value_bucket: "10_50" },
+});
+```
 
 ## Report server exceptions
 
@@ -204,14 +241,44 @@ observability failure does not change the request error path.
 | Browser identity and state | Uses `person_profiles: "never"`, memory persistence, cookieless mode, Do Not Track, no cross-subdomain cookie, and no device model. |
 | Event allowlist | Accepts four built-in provider events plus names in `customEvents`. Delegated DOM events use their own explicit allowlist. |
 | Custom properties | Keeps at most 32 valid keys. Keys are at most 64 characters, strings at most 256 characters, and arrays at most 20 primitive values. |
-| Provider properties | Redacts recognized credentials and email addresses, strips URL queries and fragments, reduces third-party referrers to an origin, bounds nesting and strings, and can remove campaign attribution fields. |
+| Provider properties | Keeps `utm_*` and ad click IDs as properties and as the only URL query parameters. Removes every other query parameter and every fragment, redacts email addresses, credentials, OAuth `code` and `state`, and `email`, `token`, `code`, `key`, and `secret` values, reduces third-party referrers to an origin, and bounds nesting and strings. |
+| Sensitive paths | Removes the whole query, campaign parameters included, on routes listed in `sensitivePaths`, such as sign-in, auth callbacks, account, billing, and invite links. |
 | Unknown owned routes | Retains the normalized path as `page_kind: "other"`, or collapses it to `unknownCanonicalPath` when the site opts in. |
 | Browser exception budget | Allows at most 20 exceptions per rolling minute and two occurrences per fingerprint. Repeated object identities are ignored. |
 | Server exception budget | Allows at most 30 exceptions per rolling minute and three occurrences per fingerprint. Provider failures are swallowed. |
 | Provider destination | Defaults to PostHog's US ingestion host. A caller that supplies `apiHost` owns approval of that destination. |
 
-`stripQueryAttribution: true` still lets the traffic classifier recognize a known `utm_source` from
-the current request before provider properties remove supported campaign and click identifiers.
+Version 0.2.0 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
+Sites moving from 0.1.x send `analytics_schema_version: 2`.
+
+## Test your site against real PostHog.js
+
+`@hraness/posthog/testing` loads PostHog.js in a child process with a stubbed `fetch`, initializes
+it with your site's production config, and checks the outgoing requests. It captures page views,
+page leaves, Web Vitals, an exception, and your custom events from a URL with campaign parameters,
+an email, and an OAuth code, then from a sensitive path.
+
+```ts
+import { expect, test } from "bun:test";
+import { checkPostHogContract } from "@hraness/posthog/testing";
+
+test("analytics requests keep what PostHog needs and drop personal data", () => {
+  const { violations } = checkPostHogContract({
+    site: analyticsSite,
+    sensitivePath: "/account",
+    customEvents: [{ event: "guide opened", properties: { guide_kind: "reference" } }],
+  });
+  expect(violations).toEqual([]);
+});
+```
+
+`runPostHogHarness` returns the decoded requests if you want to write your own assertions.
+Both helpers test the package configuration for your site definition. If your application
+replaces `before_send` or changes other production options, run those actual options in your
+own SDK harness as well; the package helper does not test application overrides.
+
+After a sensitive route, the browser instance drops campaign properties and URL attribution
+on subsequent routes too, because the SDK can retain private landing attribution in memory.
 
 ## Inspect traffic attribution
 
@@ -259,7 +326,7 @@ artifacts. Keep the personal token out of browser bundles, fixtures, logs, and r
 3. Choose the smallest runtime-specific export from the table above.
 4. Keep `phc_` public project tokens separate from build-only `phx_` personal keys.
 5. Declare every custom or delegated event before adding its capture call or data attribute.
-6. Run the consuming application's tests in production and ineligible host scenarios.
+6. Run `checkPostHogContract` from `@hraness/posthog/testing` in the application's required tests.
 7. Run this repository's package gate before changing an export, privacy default, or peer range.
 
 ## Questions
@@ -269,7 +336,7 @@ artifacts. Keep the personal token out of browser bundles, fixtures, logs, and r
 For page views alone, configure it directly: `posthog-js` has a
 [cookieless mode](https://posthog.com/tutorials/cookieless-tracking). This package adds checks you
 would otherwise write yourself: capture only on declared hosts, canonical route paths, rejection of
-undeclared events, query stripping, credential and email redaction, repeat-limited server error
+undeclared events, query filtering, credential and email redaction, repeat-limited server error
 reports, and source-map upload for production builds.
 
 ### Does the package send analytics in development or preview deployments?
@@ -306,6 +373,7 @@ entry point with Node.js 24 itself (not Bun).
 - [Site and route types](src/site.ts)
 - [Event sanitization and budgets](src/event.ts)
 - [Browser adapter](src/client.ts)
+- [Test harness](src/testing.ts)
 - [Server adapter](src/server.ts)
 - [Source-map adapter](src/next-config.ts)
 - [Security policy](SECURITY.md)

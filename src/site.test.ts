@@ -28,7 +28,7 @@ const site = {
 test("classifies canonical routes without query strings or fragments", () => {
   expect(classifyAnalyticsRoute(site, "https://www.example.com/research/sleep?q=secret#notes"))
     .toEqual({
-      analytics_schema_version: 1,
+      analytics_schema_version: 2,
       site_id: "example",
       canonical_domain: "example.com",
       canonical_path: "/research/sleep",

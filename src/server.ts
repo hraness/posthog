@@ -4,12 +4,14 @@ import { PostHog } from "posthog-node";
 import {
   analyticsErrorFingerprint,
   ExceptionBudget,
+  normalizeAnalyticsProperties,
   sanitizeAnalyticsError,
   sanitizeProviderProperties,
 } from "./event.js";
 import {
   classifyAnalyticsRoute,
   isAllowedAnalyticsHost,
+  isAllowedCustomEvent,
   normalizeAnalyticsHostname,
   type PostHogSiteDefinition,
 } from "./site.js";
@@ -102,6 +104,7 @@ export function createPostHogRequestErrorReporter(
       ...traffic,
       error_fingerprint: fingerprint,
       error_surface: "server",
+      error_origin: "next_request_error",
       request_method: request.method.slice(0, 12).toUpperCase(),
       route_type: context.routeType,
       router_kind: context.routerKind,
@@ -114,4 +117,39 @@ export function createPostHogRequestErrorReporter(
       // Observability must never break a request or error boundary.
     }
   };
+}
+
+/** Sends an anonymous, allowlisted server event and waits for delivery. */
+export async function capturePostHogEvent(
+  options: PostHogServerOptions,
+  input: Readonly<{ event: string; hostname: string; pathname?: string; properties?: unknown }>,
+): Promise<boolean> {
+  const production = options.production ?? process.env.VERCEL_ENV === "production";
+  if (!production || !isAllowedAnalyticsHost(options.site, input.hostname)
+    || !isAllowedCustomEvent(options.site, input.event)) {
+    return false;
+  }
+  const route = classifyAnalyticsRoute(options.site, {
+    hostname: input.hostname,
+    pathname: input.pathname ?? "/",
+  });
+  if (!route) return false;
+  try {
+    const client = serverClient(options);
+    if (!client) return false;
+    await client.captureImmediate({
+      distinctId: `server:${options.site.id}`,
+      event: input.event,
+      properties: {
+        ...sanitizeProviderProperties(options.site, normalizeAnalyticsProperties(input.properties)),
+        ...route,
+        $process_person_profile: false,
+      },
+      disableGeoip: true,
+    });
+    return true;
+  } catch {
+    // Analytics failures must never break a payment webhook or request.
+    return false;
+  }
 }
