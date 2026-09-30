@@ -4,12 +4,12 @@ var CONSENT_STORAGE_KEY = "hraness-consent-cookies-v1";
 var CONSENT_ACCEPTED_EVENT = "hraness-consent-accepted";
 
 class AnalyticsConsent {
-  environment;
   regionAllows = false;
   accepted = false;
   denied = false;
   started = false;
   listeners = new Set;
+  environment;
   constructor(environment) {
     this.environment = environment;
   }
@@ -96,4 +96,4 @@ export {
   AnalyticsConsent
 };
 
-//# debugId=AF1464B1DAF2DFA064756E2164756E21
+//# debugId=03ACA81AF415233F64756E2164756E21

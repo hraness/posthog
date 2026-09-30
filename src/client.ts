@@ -188,12 +188,11 @@ export function createPostHogBeforeSend(
     const rawReferrer = typeof capture.properties.$referrer === "string"
       ? capture.properties.$referrer
       : evidence.referrer;
-    const traffic = classifyAnalyticsTraffic(site, rawReferrer, rawCurrentUrl);
     const location = parseAnalyticsLocation(site, rawCurrentUrl);
     // Scrub values in place. Rebuilding from a short allowlist loses $host,
     // $raw_user_agent, $cookieless_mode, and session properties, and PostHog
     // then drops or merges the event.
-    for (const url of [rawCurrentUrl, capture.properties.$initial_current_url, capture.properties.$session_entry_url]) {
+    for (const url of [evidence.href, rawCurrentUrl, capture.properties.$initial_current_url, capture.properties.$session_entry_url]) {
       if (typeof url !== "string") continue;
       try {
         const pathname = new URL(url, `https://${site.canonicalDomain}`).pathname;
@@ -207,6 +206,7 @@ export function createPostHogBeforeSend(
     // Memory persistence can carry a private landing page's campaign into a
     // later public navigation. Once observed, discard attribution for this
     // browser instance, including initial and session-entry URL queries.
+    const traffic = classifyAnalyticsTraffic(site, rawReferrer, sensitiveAttributionSeen ? null : rawCurrentUrl);
     const properties = sanitizeProviderProperties(site, capture.properties, rawCurrentUrl, sensitiveAttributionSeen);
     // PostHog derives the batch api_key from this required transport property.
     // Preserve the already-validated public project token after generic strings

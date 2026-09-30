@@ -285,8 +285,16 @@ export function checkPostHogContract(options: PostHogContractOptions): PostHogCo
     } catch {
       violations.push(`${label}: $current_url is not a URL`);
     }
-    if (params.join(",") !== "gclid,utm_source") {
-      violations.push(`${label}: $current_url query is [${params.join(",")}], want [gclid,utm_source]`);
+    const expectedParams = site.attributionMode === "referrer_only" ? "" : "gclid,utm_source";
+    if (params.join(",") !== expectedParams) {
+      violations.push(`${label}: $current_url query is [${params.join(",")}], want [${expectedParams}]`);
+    }
+    if (site.attributionMode === "referrer_only") {
+      const serialized = JSON.stringify(event.properties);
+      if (serialized.includes("contractclick") || serialized.includes('"utm_source"')) {
+        violations.push(`${label}: referrer-only site kept attribution`);
+      }
+      continue;
     }
     if (propertyOf(event, "utm_source") !== "contract") {
       violations.push(`${label}: utm_source was not kept`);

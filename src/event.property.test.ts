@@ -78,3 +78,13 @@ test("property: sensitive paths discard every campaign value and URL query", () 
     expect(properties).not.toHaveProperty("$initial_gclid");
   }));
 });
+
+test("property: referrer-only attribution is removed at every nesting level without a current URL", () => {
+  fc.assert(fc.property(fc.string(), fc.string(), (campaign, clickId) => {
+    const values = { utm_source: campaign, gclid: clickId, $initial_utm_source: campaign, $session_entry_gclid: clickId };
+    const clean = sanitizeProviderProperties({ ...site, attributionMode: "referrer_only" }, {
+      ...values, $set: { ...values }, $set_once: { nested: { ...values } },
+    });
+    expect(clean).toEqual({ $set: {}, $set_once: { nested: {} } });
+  }));
+});

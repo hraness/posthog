@@ -1,5 +1,7 @@
 import {
   isAllowedAnalyticsHost,
+  isAllowedAnalyticsPath,
+  isSensitiveAnalyticsPath,
   normalizeAnalyticsHostname,
   type PostHogSiteDefinition,
 } from "./site.js";
@@ -90,12 +92,13 @@ function parseAttributionSource(
   site: PostHogSiteDefinition,
   currentUrl: string | null | undefined,
 ): string | null {
-  if (!currentUrl) {
+  if (!currentUrl || site.attributionMode === "referrer_only") {
     return null;
   }
   try {
-    return new URL(currentUrl, `https://${site.canonicalDomain}`)
-      .searchParams.get("utm_source");
+    const url = new URL(currentUrl, `https://${site.canonicalDomain}`);
+    if (isSensitiveAnalyticsPath(site, url.pathname) || !isAllowedAnalyticsPath(site, url.pathname)) return null;
+    return url.searchParams.get("utm_source");
   } catch {
     return null;
   }

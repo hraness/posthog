@@ -216,7 +216,7 @@ export function analyticsAttributionQuery(
   site: PostHogSiteDefinition,
   url: URL,
 ): string {
-  if (isSensitiveAnalyticsPath(site, url.pathname)) {
+  if (site.attributionMode === "referrer_only" || isSensitiveAnalyticsPath(site, url.pathname)) {
     return "";
   }
   const kept = new URLSearchParams();
@@ -379,7 +379,7 @@ export function sanitizeProviderProperties(
 ): Record<string, unknown> {
   const context: SanitizeContext = {
     site,
-    sensitive: stripAttribution || isSensitiveProviderLocation(site, currentUrl),
+    sensitive: site.attributionMode === "referrer_only" || stripAttribution || isSensitiveProviderLocation(site, currentUrl),
     seen: new WeakSet<object>(),
   };
   const sanitized: Record<string, unknown> = {};

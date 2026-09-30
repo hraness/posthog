@@ -255,7 +255,7 @@ function attributionValue(value) {
   return cleanPropertyString(redactSensitiveText(value));
 }
 function analyticsAttributionQuery(site, url) {
-  if (isSensitiveAnalyticsPath(site, url.pathname)) {
+  if (site.attributionMode === "referrer_only" || isSensitiveAnalyticsPath(site, url.pathname)) {
     return "";
   }
   const kept = new URLSearchParams;
@@ -378,7 +378,7 @@ function isSensitiveProviderLocation(site, currentUrl) {
 function sanitizeProviderProperties(site, properties, currentUrl = properties["$current_url"], stripAttribution = false) {
   const context = {
     site,
-    sensitive: stripAttribution || isSensitiveProviderLocation(site, currentUrl),
+    sensitive: site.attributionMode === "referrer_only" || stripAttribution || isSensitiveProviderLocation(site, currentUrl),
     seen: new WeakSet
   };
   const sanitized = {};
@@ -516,11 +516,14 @@ function sourceForAttribution(value, sources) {
   return null;
 }
 function parseAttributionSource(site, currentUrl) {
-  if (!currentUrl) {
+  if (!currentUrl || site.attributionMode === "referrer_only") {
     return null;
   }
   try {
-    return new URL(currentUrl, `https://${site.canonicalDomain}`).searchParams.get("utm_source");
+    const url = new URL(currentUrl, `https://${site.canonicalDomain}`);
+    if (isSensitiveAnalyticsPath(site, url.pathname) || !isAllowedAnalyticsPath(site, url.pathname))
+      return null;
+    return url.searchParams.get("utm_source");
   } catch {
     return null;
   }
@@ -718,4 +721,4 @@ export {
   capturePostHogEvent
 };
 
-//# debugId=6BBFF7CC84B13E1864756E2164756E21
+//# debugId=40DF7FC4AB9D264864756E2164756E21

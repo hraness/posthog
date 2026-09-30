@@ -85,3 +85,16 @@ test("checks exact www ownership before normalizing external taxonomy", () => {
     referrer_host: "example.com",
   });
 });
+
+test("referrer-only and sensitive routes never classify traffic from campaign queries", () => {
+  const referrerOnly = { ...site, attributionMode: "referrer_only" as const };
+  expect(classifyAnalyticsTraffic(referrerOnly, "", "https://example.com/?utm_source=google")).toEqual({
+    traffic_channel: "direct", traffic_source: "direct",
+  });
+  const guarded = { ...site, sensitivePaths: [{ match: "prefix" as const, path: "/auth" }], excludedPaths: [{ match: "prefix" as const, path: "/private" }] };
+  for (const path of ["/auth/callback", "/%61uth/callback", "/private/secret"]) {
+    expect(classifyAnalyticsTraffic(guarded, "https://bing.com/search", `https://example.com${path}?utm_source=chatgpt`)).toMatchObject({
+      traffic_channel: "organic_search", traffic_source: "bing",
+    });
+  }
+});
