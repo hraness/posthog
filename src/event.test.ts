@@ -29,6 +29,21 @@ test("keeps only bounded explicit primitive properties", () => {
   })).toEqual({ mode: "sleep", count: 2, okay: true });
 });
 
+test("drops provider-derived search keywords and their persisted aliases", () => {
+  expect(sanitizeProviderProperties(site, {
+    ph_keyword: "private search",
+    $initial_ph_keyword: "private initial search",
+    $session_entry_ph_keyword: "private session search",
+    $set: { PH_KEYWORD: "private nested search", $initial_referring_domain: "google.com" },
+    $search_engine: "google",
+    utm_term: "advertiser-label",
+  })).toEqual({
+    $set: { $initial_referring_domain: "google.com" },
+    $search_engine: "google",
+    utm_term: "advertiser-label",
+  });
+});
+
 test("redacts queries and referrer paths while preserving provider payload shape", () => {
   expect(sanitizeProviderProperties(site, {
     $current_url: "https://example.com/research/sleep?email=a@example.com#private",
