@@ -1,0 +1,283 @@
+{
+  "site": {
+    "id": "compatibility",
+    "canonicalDomain": "example.com",
+    "allowedHosts": [
+      "example.com"
+    ],
+    "schemaVersion": 1,
+    "routes": [
+      {
+        "match": "exact",
+        "path": "/",
+        "pageKind": "home"
+      },
+      {
+        "match": "prefix",
+        "path": "/docs",
+        "pageKind": "docs"
+      }
+    ],
+    "customEvents": [
+      "cta opened"
+    ],
+    "stripQueryAttribution": true,
+    "unknownCanonicalPath": "/other"
+  },
+  "cases": [
+    {
+      "name": "public",
+      "capture": {
+        "uuid": "public",
+        "event": "$pageview",
+        "properties": {
+          "token": "phc_public",
+          "$current_url": "https://example.com/docs/install?utm_source=campaign&gclid=click&email=private%40example.com#fragment",
+          "$initial_current_url": "https://example.com/docs/install?utm_source=campaign&gclid=click&email=private%40example.com#fragment",
+          "$session_entry_url": "https://example.com/docs/install?utm_source=campaign&gclid=click&email=private%40example.com#fragment",
+          "$referrer": "https://example.com/account/private?utm_source=retained",
+          "utm_source": "campaign",
+          "$initial_gclid": "click",
+          "$session_entry_utm_campaign": "initial",
+          "target_kind": "install",
+          "nested": {
+            "url": "https://example.com/docs/install?utm_source=campaign&gclid=click&email=private%40example.com#fragment",
+            "referrer": "https://outside.example/search?q=private",
+            "message": "Contact private@example.com",
+            "utm_medium": "nested"
+          },
+          "$host": "example.com",
+          "$raw_user_agent": "https://example.com/path?secret=private-query",
+          "$cookieless_mode": true,
+          "distinct_id": "private@example.com",
+          "$device_id": "Bearer private-token"
+        }
+      },
+      "sanitized": {
+        "token": "[credential]",
+        "$current_url": "https://example.com/docs/install",
+        "$initial_current_url": "https://example.com/docs/install",
+        "$session_entry_url": "https://example.com/docs/install",
+        "$referrer": "https://example.com",
+        "target_kind": "install",
+        "nested": {
+          "url": "https://example.com/docs/install",
+          "referrer": "https://outside.example",
+          "message": "Contact [email]"
+        },
+        "$host": "example.com",
+        "$raw_user_agent": "https://example.com/path",
+        "$cookieless_mode": true,
+        "distinct_id": "[email]",
+        "$device_id": "Bearer [credential]"
+      },
+      "sent": {
+        "uuid": "public",
+        "event": "$pageview",
+        "properties": {
+          "token": "phc_public",
+          "$current_url": "https://example.com/docs/install",
+          "$initial_current_url": "https://example.com/docs/install",
+          "$session_entry_url": "https://example.com/docs/install",
+          "$referrer": "https://example.com",
+          "target_kind": "install",
+          "nested": {
+            "url": "https://example.com/docs/install",
+            "referrer": "https://outside.example",
+            "message": "Contact [email]"
+          },
+          "$host": "example.com",
+          "$raw_user_agent": "https://example.com/path",
+          "$cookieless_mode": true,
+          "distinct_id": "[email]",
+          "$device_id": "Bearer [credential]",
+          "$process_person_profile": false,
+          "analytics_schema_version": 1,
+          "site_id": "compatibility",
+          "canonical_domain": "example.com",
+          "canonical_path": "/docs/install",
+          "page_kind": "docs",
+          "traffic_channel": "internal",
+          "traffic_source": "internal",
+          "referrer_host": "example.com"
+        }
+      }
+    },
+    {
+      "name": "private-unknown",
+      "capture": {
+        "uuid": "private-unknown",
+        "event": "$pageview",
+        "properties": {
+          "token": "phc_public",
+          "$current_url": "https://example.com/account/person-173?utm_campaign=private&code=oauth-code",
+          "$initial_current_url": "https://example.com/account/person-173?utm_campaign=private&code=oauth-code",
+          "$session_entry_url": "https://example.com/account/person-173?utm_campaign=private&code=oauth-code",
+          "$referrer": "https://example.com/account/private?utm_source=retained",
+          "utm_source": "campaign",
+          "$initial_gclid": "click",
+          "$session_entry_utm_campaign": "initial",
+          "target_kind": "install",
+          "nested": {
+            "url": "https://example.com/account/person-173?utm_campaign=private&code=oauth-code",
+            "referrer": "https://outside.example/search?q=private",
+            "message": "Contact private@example.com",
+            "utm_medium": "nested"
+          },
+          "$host": "example.com",
+          "$raw_user_agent": "https://example.com/path?secret=private-query",
+          "$cookieless_mode": true,
+          "distinct_id": "private@example.com",
+          "$device_id": "Bearer private-token"
+        }
+      },
+      "sanitized": {
+        "token": "[credential]",
+        "$current_url": "https://example.com/other",
+        "$initial_current_url": "https://example.com/other",
+        "$session_entry_url": "https://example.com/other",
+        "$referrer": "https://example.com",
+        "target_kind": "install",
+        "nested": {
+          "url": "https://example.com/other",
+          "referrer": "https://outside.example",
+          "message": "Contact [email]"
+        },
+        "$host": "example.com",
+        "$raw_user_agent": "https://example.com/path",
+        "$cookieless_mode": true,
+        "distinct_id": "[email]",
+        "$device_id": "Bearer [credential]"
+      },
+      "sent": {
+        "uuid": "private-unknown",
+        "event": "$pageview",
+        "properties": {
+          "token": "phc_public",
+          "$current_url": "https://example.com/other",
+          "$initial_current_url": "https://example.com/other",
+          "$session_entry_url": "https://example.com/other",
+          "$referrer": "https://example.com",
+          "target_kind": "install",
+          "nested": {
+            "url": "https://example.com/other",
+            "referrer": "https://outside.example",
+            "message": "Contact [email]"
+          },
+          "$host": "example.com",
+          "$raw_user_agent": "https://example.com/path",
+          "$cookieless_mode": true,
+          "distinct_id": "[email]",
+          "$device_id": "Bearer [credential]",
+          "$process_person_profile": false,
+          "analytics_schema_version": 1,
+          "site_id": "compatibility",
+          "canonical_domain": "example.com",
+          "canonical_path": "/other",
+          "page_kind": "other",
+          "traffic_channel": "internal",
+          "traffic_source": "internal",
+          "referrer_host": "example.com"
+        }
+      }
+    },
+    {
+      "name": "custom",
+      "capture": {
+        "uuid": "custom",
+        "event": "cta opened",
+        "properties": {
+          "token": "phc_public",
+          "$current_url": "https://example.com/?utm_medium=share&token=private-token",
+          "$initial_current_url": "https://example.com/?utm_medium=share&token=private-token",
+          "$session_entry_url": "https://example.com/?utm_medium=share&token=private-token",
+          "$referrer": "https://example.com/account/private?utm_source=retained",
+          "utm_source": "campaign",
+          "$initial_gclid": "click",
+          "$session_entry_utm_campaign": "initial",
+          "target_kind": "install",
+          "nested": {
+            "url": "https://example.com/?utm_medium=share&token=private-token",
+            "referrer": "https://outside.example/search?q=private",
+            "message": "Contact private@example.com",
+            "utm_medium": "nested"
+          },
+          "$host": "example.com",
+          "$raw_user_agent": "https://example.com/path?secret=private-query",
+          "$cookieless_mode": true,
+          "distinct_id": "private@example.com",
+          "$device_id": "Bearer private-token"
+        }
+      },
+      "sanitized": {
+        "token": "[credential]",
+        "$current_url": "https://example.com/",
+        "$initial_current_url": "https://example.com/",
+        "$session_entry_url": "https://example.com/",
+        "$referrer": "https://example.com",
+        "target_kind": "install",
+        "nested": {
+          "url": "https://example.com/",
+          "referrer": "https://outside.example",
+          "message": "Contact [email]"
+        },
+        "$host": "example.com",
+        "$raw_user_agent": "https://example.com/path",
+        "$cookieless_mode": true,
+        "distinct_id": "[email]",
+        "$device_id": "Bearer [credential]"
+      },
+      "sent": {
+        "uuid": "custom",
+        "event": "cta opened",
+        "properties": {
+          "token": "phc_public",
+          "$current_url": "https://example.com/",
+          "$initial_current_url": "https://example.com/",
+          "$session_entry_url": "https://example.com/",
+          "$referrer": "https://example.com",
+          "target_kind": "install",
+          "nested": {
+            "url": "https://example.com/",
+            "referrer": "https://outside.example",
+            "message": "Contact [email]"
+          },
+          "$host": "example.com",
+          "$raw_user_agent": "https://example.com/path",
+          "$cookieless_mode": true,
+          "distinct_id": "[email]",
+          "$device_id": "Bearer [credential]",
+          "$process_person_profile": false,
+          "analytics_schema_version": 1,
+          "site_id": "compatibility",
+          "canonical_domain": "example.com",
+          "canonical_path": "/",
+          "page_kind": "home",
+          "traffic_channel": "internal",
+          "traffic_source": "internal",
+          "referrer_host": "example.com"
+        }
+      }
+    }
+  ],
+  "config": {
+    "autocapture": false,
+    "capture_heatmaps": false,
+    "disable_session_recording": true,
+    "persistence": "memory",
+    "cookieless_mode": "always",
+    "mask_personal_data_properties": true,
+    "custom_personal_data_properties": [
+      "email",
+      "token",
+      "code",
+      "key",
+      "secret"
+    ]
+  },
+  "source": {
+    "tag": "v0.2.0",
+    "commit": "031a72cfb172ba70be9d6190f69ba05387a8346a",
+    "description": "Generated from the immutable v0.2.0 event and client modules with synthetic inputs; no provider requests."
+  }
+}

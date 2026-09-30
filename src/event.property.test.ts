@@ -88,3 +88,18 @@ test("property: referrer-only attribution is removed at every nesting level with
     expect(clean).toEqual({ $set: {}, $set_once: { nested: {} } });
   }));
 });
+
+test("property: minimal mode never retains a campaign value or referrer path", () => {
+  fc.assert(fc.property(fc.string(), (value) => {
+    const properties = sanitizeProviderProperties({ ...site, privacyMode: "minimal" }, {
+      $current_url: `https://example.com/?utm_source=${encodeURIComponent(value)}`,
+      $referrer: `https://example.com/private?utm_source=${encodeURIComponent(value)}`,
+      utm_source: value,
+      nested: { $initial_gclid: value, $session_entry_utm_campaign: value },
+    });
+    expect(properties.$current_url).toBe("https://example.com/");
+    expect(properties.$referrer).toBe("https://example.com");
+    expect(properties).not.toHaveProperty("utm_source");
+    expect(properties.nested).toEqual({});
+  }));
+});

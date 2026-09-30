@@ -256,7 +256,7 @@ function attributionValue(value) {
   return cleanPropertyString(redactSensitiveText(value));
 }
 function analyticsAttributionQuery(site, url) {
-  if (site.attributionMode === "referrer_only" || isSensitiveAnalyticsPath(site, url.pathname)) {
+  if (site.privacyMode === "minimal" || site.attributionMode === "referrer_only" || isSensitiveAnalyticsPath(site, url.pathname)) {
     return "";
   }
   const kept = new URLSearchParams;
@@ -277,6 +277,9 @@ function ownedCanonicalUrl(site, parsed) {
 }
 function sanitizeUrlValue(site, key, value, stripAttribution) {
   if (REFERRER_URL_KEYS.has(key)) {
+    if (site.privacyMode === "minimal") {
+      return { handled: true, value: redactSensitiveText(sanitizeThirdPartyUrl(value, true)) };
+    }
     if (value === DIRECT_REFERRER) {
       return { handled: true, value };
     }
@@ -331,7 +334,7 @@ function sanitizeProviderValue(context, key, value, depth) {
     const safe = attributionValue(value);
     return safe || undefined;
   }
-  if (PASSTHROUGH_PROPERTY_NAMES.has(key)) {
+  if (site.privacyMode !== "minimal" && PASSTHROUGH_PROPERTY_NAMES.has(key)) {
     if (typeof value === "string") {
       return value.slice(0, MAX_PROVIDER_PROPERTY_STRING_LENGTH);
     }
@@ -379,7 +382,7 @@ function isSensitiveProviderLocation(site, currentUrl) {
 function sanitizeProviderProperties(site, properties, currentUrl = properties["$current_url"], stripAttribution = false) {
   const context = {
     site,
-    sensitive: site.attributionMode === "referrer_only" || stripAttribution || isSensitiveProviderLocation(site, currentUrl),
+    sensitive: site.privacyMode === "minimal" || site.attributionMode === "referrer_only" || stripAttribution || isSensitiveProviderLocation(site, currentUrl),
     seen: new WeakSet
   };
   const sanitized = {};
@@ -585,4 +588,4 @@ export {
   ANALYTICS_ATTRIBUTION_PARAMETERS
 };
 
-//# debugId=12FBD679544369D864756E2164756E21
+//# debugId=D6BF5B4401B8DC4F64756E2164756E21
