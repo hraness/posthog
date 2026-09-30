@@ -1,6 +1,6 @@
 {
   "name": "@hraness/posthog",
-  "version": "0.2.1",
+  "version": "0.3.1",
   "description": "Cookieless PostHog analytics for Next.js, limited to the hosts, routes, and events your site declares, plus server error reporting and production source-map upload.",
   "license": "MIT",
   "type": "module",
@@ -66,6 +66,11 @@
       "import": "./dist/traffic.js",
       "default": "./dist/traffic.js"
     },
+    "./testing": {
+      "types": "./src/testing.ts",
+      "import": "./dist/testing.js",
+      "default": "./dist/testing.js"
+    },
     "./consent": {
       "types": "./src/consent.ts",
       "import": "./dist/consent.js",
@@ -84,6 +89,8 @@
     "src/server.ts",
     "src/site.ts",
     "src/traffic.ts",
+    "src/testing-harness.ts",
+    "src/testing.ts",
     "LICENSE",
     "README.md"
   ],

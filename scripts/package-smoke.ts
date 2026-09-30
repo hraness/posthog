@@ -182,7 +182,7 @@ const site = {
   id: "installed-consumer",
   canonicalDomain: "example.com",
   allowedHosts: ["example.com"],
-  schemaVersion: 1,
+  schemaVersion: 2,
   routes: [{ match: "exact", path: "/", pageKind: "home" }],
   customEvents: [],
 };
@@ -218,6 +218,41 @@ if (!reactSource.includes('from "./client.js"') || reactSource.includes("activeS
 `);
     await run(
       [nodeExecutable, "./runtime-smoke.mjs"],
+      consumer,
+      { NODE_ENV: "production" },
+    );
+
+    // The installed test harness must run real posthog-js under genuine Node,
+    // where `navigator` is a getter-only global.
+    await writeFile(join(consumer, "harness-smoke.mjs"), `
+import { checkPostHogContract } from "@hraness/posthog/testing";
+
+const site = {
+  id: "installed-consumer",
+  canonicalDomain: "example.com",
+  allowedHosts: ["example.com"],
+  schemaVersion: 2,
+  routes: [
+    { match: "exact", path: "/", pageKind: "home" },
+    { match: "prefix", path: "/account", pageKind: "account" },
+  ],
+  customEvents: ["cta clicked"],
+  sensitivePaths: [{ match: "prefix", path: "/account" }],
+};
+const report = checkPostHogContract({
+  site,
+  sensitivePath: "/account",
+  customEvents: [{ event: "cta clicked", properties: { cta: "start", placement: "hero" } }],
+});
+if (report.violations.length > 0) {
+  throw new Error("installed harness violations: " + JSON.stringify(report.violations));
+}
+if (report.result.sent.length === 0) {
+  throw new Error("installed harness sent no requests");
+}
+`);
+    await run(
+      [nodeExecutable, "./harness-smoke.mjs"],
       consumer,
       { NODE_ENV: "production" },
     );
@@ -285,7 +320,7 @@ if (!reactSource.includes('from "./client.js"') || reactSource.includes("activeS
       '  id: "package-smoke",',
       '  canonicalDomain: "example.com",',
       '  allowedHosts: ["example.com"],',
-      "  schemaVersion: 1,",
+      "  schemaVersion: 2,",
       '  routes: [{ match: "exact", path: "/", pageKind: "home" }],',
       "  customEvents: [],",
       "};",

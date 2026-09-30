@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import {
   capturePostHogEvent,
   capturePostHogException,
+  capturePostHogPageNotFound,
   observePostHogBrowser,
   initializePostHogBrowser,
   installDelegatedPostHogCapture,
@@ -53,9 +54,28 @@ export function PostHogEventReporter(
 ) {
   const { apiHost, apiKey, eventName, properties, site } = props;
   useEffect(() => {
-    if (!initializePostHogBrowser({ apiHost, apiKey, site })) return;
-    capturePostHogEvent(site, eventName, properties);
+    let sent = false;
+    return observePostHogBrowser({ apiHost, apiKey, site }, () => {
+      if (!sent) { sent = true; capturePostHogEvent(site, eventName, properties); }
+      return undefined;
+    });
   }, [apiHost, apiKey, eventName, properties, site]);
+  return null;
+}
+
+/**
+ * Mount in `not-found.tsx` to send one `page not found` per 404 render with the
+ * normalized requested path and the referrer host.
+ */
+export function PostHogPageNotFound(props: PostHogAnalyticsProps) {
+  const { apiHost, apiKey, site } = props;
+  useEffect(() => {
+    let sent = false;
+    return observePostHogBrowser({ apiHost, apiKey, site }, () => {
+      if (!sent) { sent = true; capturePostHogPageNotFound(site); }
+      return undefined;
+    });
+  }, [apiHost, apiKey, site]);
   return null;
 }
 

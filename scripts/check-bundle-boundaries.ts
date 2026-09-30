@@ -9,6 +9,19 @@ const allowedImports = new Map<string, ReadonlySet<string>>([
   ["react", new Set(["./client.js", "react", "react/jsx-runtime"])],
   ["server", new Set(["posthog-node"])],
   ["next-config", new Set(["@posthog/nextjs-config"])],
+  [
+    "testing",
+    new Set([
+      "node:child_process",
+      "node:fs",
+      "node:module",
+      "node:url",
+      "node:zlib",
+      "posthog-js",
+      "posthog-js/dist/web-vitals.js",
+    ]),
+  ],
+  ["testing-harness", new Set(["node:module"])],
 ]);
 
 const staticImport = /(?:from\s+|import\s*)["']([^"']+)["']/gu;
@@ -64,6 +77,12 @@ if (!reactSource.includes('from "./client.js"')) {
 }
 if (!clientSource.includes("activeSiteId") || reactSource.includes("activeSiteId")) {
   throw new Error("client and react do not have exactly one active-site state owner");
+}
+
+const harnessSource = await readFile("dist/testing-harness.js", "utf8");
+if (!/await import\(["']posthog-js["']\)/u.test(harnessSource)
+  || !/await import\(["']\.\/client\.js["']\)/u.test(harnessSource)) {
+  throw new Error("testing-harness must load posthog-js only after defining browser globals");
 }
 
 const expectedArtifacts = new Set(

@@ -1,4 +1,8 @@
-"use client";
+// src/testing.ts
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
 
 // src/client.ts
 import { posthog } from "posthog-js";
@@ -82,21 +86,13 @@ function canonicalAnalyticsUrl(site, pathname) {
 function isAllowedCustomEvent(site, eventName) {
   return site.customEvents.includes(eventName);
 }
-function isAllowedDelegatedEvent(site, eventName) {
-  return site.delegatedEvents?.includes(eventName) ?? false;
-}
 function isSensitiveAnalyticsPath(site, pathname) {
   const normalized = normalizeAnalyticsPathname(pathname);
   return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
 }
 
 // src/event.ts
-var MAX_PROPERTY_COUNT = 32;
-var MAX_PROPERTY_KEY_LENGTH = 64;
 var MAX_PROPERTY_STRING_LENGTH = 256;
-var MAX_PROPERTY_ARRAY_LENGTH = 20;
-var MAX_ERROR_MESSAGE_LENGTH = 512;
-var MAX_ERROR_STACK_LENGTH = 6000;
 var MAX_PROVIDER_PROPERTY_STRING_LENGTH = 2048;
 var CURRENT_URL_KEYS = new Set([
   "$current_url",
@@ -194,45 +190,6 @@ function cleanPropertyString(value) {
     const codePoint = character.codePointAt(0) ?? 0;
     return codePoint < 32 || codePoint === 127 ? " " : character;
   }).join("").replace(/\s{2,}/gu, " ").trim().slice(0, MAX_PROPERTY_STRING_LENGTH);
-}
-function normalizePrimitive(value) {
-  if (value === null || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === "string") {
-    return cleanPropertyString(value);
-  }
-  return;
-}
-function normalizePropertyValue(value) {
-  const primitive = normalizePrimitive(value);
-  if (primitive !== undefined) {
-    return primitive;
-  }
-  if (!Array.isArray(value)) {
-    return;
-  }
-  const normalized = value.slice(0, MAX_PROPERTY_ARRAY_LENGTH).map(normalizePrimitive).filter((item) => item !== undefined);
-  return normalized;
-}
-function normalizeAnalyticsProperties(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  const normalized = {};
-  for (const [key, propertyValue] of Object.entries(value).slice(0, MAX_PROPERTY_COUNT)) {
-    if (!/^[a-z][a-z0-9_]*$/u.test(key) || key.length > MAX_PROPERTY_KEY_LENGTH) {
-      continue;
-    }
-    const safeValue = normalizePropertyValue(propertyValue);
-    if (safeValue !== undefined) {
-      normalized[key] = safeValue;
-    }
-  }
-  return normalized;
 }
 function sanitizeThirdPartyUrl(value, originOnly) {
   try {
@@ -384,38 +341,6 @@ function sanitizeProviderProperties(site, properties, currentUrl = properties["$
 function redactSensitiveText(value) {
   return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s?#]+)@/giu, "$1[credential]@").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=([^\s&]+)/giu, "$1=[redacted]");
 }
-function sanitizeAnalyticsError(value) {
-  try {
-    if (!(value instanceof Error)) {
-      return new Error("Non-Error rejection");
-    }
-    const name = redactSensitiveText(value.name || "Error").slice(0, 80) || "Error";
-    const message = redactSensitiveText(value.message || "Unknown error").slice(0, MAX_ERROR_MESSAGE_LENGTH);
-    const sanitized = new Error(message);
-    sanitized.name = name;
-    if (value.stack) {
-      sanitized.stack = redactSensitiveText(value.stack).slice(0, MAX_ERROR_STACK_LENGTH);
-    }
-    return sanitized;
-  } catch {
-    return new Error("Uninspectable rejection");
-  }
-}
-function analyticsErrorFingerprint(error) {
-  const stackFrame = error.stack?.split(`
-`).slice(1, 3).join(`
-`) ?? "";
-  const input = `${error.name}
-${error.message}
-${stackFrame}`;
-  let hash = 2166136261;
-  for (let index = 0;index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `e_${(hash >>> 0).toString(16).padStart(8, "0")}`;
-}
-
 class ExceptionBudget {
   #totalLimit;
   #perFingerprintLimit;
@@ -451,28 +376,6 @@ class ExceptionBudget {
     return true;
   }
 }
-var ANALYTICS_PLACEMENTS = [
-  "hero",
-  "nav",
-  "footer",
-  "inline",
-  "pricing",
-  "docs",
-  "modal",
-  "sticky",
-  "not_found"
-];
-var ANALYTICS_INSTALL_METHODS = [
-  "brew",
-  "curl",
-  "npm",
-  "bun",
-  "pip",
-  "go",
-  "cargo",
-  "other"
-];
-var ANALYTICS_LINK_KINDS = ["github", "docs", "social", "portfolio", "other"];
 var STANDARD_ANALYTICS_EVENTS = {
   pageNotFound: "page not found",
   ctaClicked: "cta clicked",
@@ -485,73 +388,11 @@ var STANDARD_ANALYTICS_EVENTS = {
   checkoutStarted: "checkout started",
   purchaseCompleted: "purchase completed"
 };
-var SNAKE_CASE_ID_PATTERN = /^[a-z][a-z0-9_]*$/u;
-function snakeCaseId(value) {
-  return typeof value === "string" && value.length <= MAX_PROPERTY_KEY_LENGTH && SNAKE_CASE_ID_PATTERN.test(value) ? value : null;
+var EVENT_NAME_PATTERN = /^[a-z][a-z0-9]*(?: [a-z0-9]+)*$/u;
+var MAX_EVENT_NAME_LENGTH = 64;
+function isStandardAnalyticsEventName(eventName) {
+  return eventName.length <= MAX_EVENT_NAME_LENGTH && EVENT_NAME_PATTERN.test(eventName);
 }
-function oneOf(values, value) {
-  return typeof value === "string" && values.includes(value) ? value : null;
-}
-function hostOf(value) {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-  try {
-    const parsed = value.includes("://") ? new URL(value) : new URL(`https://${value}`);
-    const host = parsed.hostname.toLowerCase().replace(/\.$/u, "").replace(/^www\./u, "");
-    return host && host.length <= MAX_PROPERTY_STRING_LENGTH ? host : null;
-  } catch {
-    return null;
-  }
-}
-function pageNotFoundProperties(input) {
-  if (typeof input.requestedPath !== "string") {
-    return null;
-  }
-  let pathname = input.requestedPath;
-  try {
-    if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(pathname)) {
-      pathname = new URL(pathname).pathname;
-    }
-  } catch {
-    return null;
-  }
-  const requestedPath = cleanPropertyString(redactSensitiveText(normalizeAnalyticsPathname(pathname)));
-  const referrerHost = input.referrer === "$direct" ? null : hostOf(input.referrer);
-  return {
-    requested_path: requestedPath || "/",
-    ...referrerHost ? { referrer_host: referrerHost } : {}
-  };
-}
-function ctaClickedProperties(input) {
-  const cta = snakeCaseId(input.cta);
-  const placement = oneOf(ANALYTICS_PLACEMENTS, input.placement);
-  if (!cta || !placement) {
-    return null;
-  }
-  const targetHost = hostOf(input.targetHost);
-  return { cta, placement, ...targetHost ? { target_host: targetHost } : {} };
-}
-function outboundLinkOpenedProperties(input) {
-  const targetHost = hostOf(input.targetHost);
-  const placement = oneOf(ANALYTICS_PLACEMENTS, input.placement);
-  if (!targetHost || !placement) {
-    return null;
-  }
-  const linkKind = input.linkKind === undefined ? null : oneOf(ANALYTICS_LINK_KINDS, input.linkKind);
-  if (input.linkKind !== undefined && !linkKind) {
-    return null;
-  }
-  return { target_host: targetHost, placement, ...linkKind ? { link_kind: linkKind } : {} };
-}
-function installCommandCopiedProperties(input) {
-  const installMethod = oneOf(ANALYTICS_INSTALL_METHODS, input.installMethod);
-  const placement = oneOf(ANALYTICS_PLACEMENTS, input.placement);
-  return installMethod && placement ? { install_method: installMethod, placement } : null;
-}
-
-// src/client.ts
-import { getBrowserConsent } from "./consent.js";
 
 // src/traffic.ts
 var AI_SOURCES = [
@@ -706,71 +547,12 @@ var BUILT_IN_EVENTS = new Set([
   "$exception",
   STANDARD_ANALYTICS_EVENTS.pageNotFound
 ]);
-var DEFAULT_API_HOST = "https://us.i.posthog.com";
 var clientExceptionBudget = new ExceptionBudget({
   totalLimit: 20,
   perFingerprintLimit: 2,
   windowMs: 60000
 });
 var seenErrors = new WeakSet;
-var activeSiteId = null;
-function readDelegatedAnalyticsEvent(site, target) {
-  if (typeof Element === "undefined" || !(target instanceof Element)) {
-    return null;
-  }
-  const element = target.closest("[data-analytics-event]");
-  if (typeof HTMLElement === "undefined" || !(element instanceof HTMLElement)) {
-    return null;
-  }
-  const eventName = element.dataset.analyticsEvent?.trim();
-  if (!eventName || !isAllowedDelegatedEvent(site, eventName)) {
-    return null;
-  }
-  const { dataset } = element;
-  const rawProperties = {
-    ...dataset.analyticsKind ? { target_kind: dataset.analyticsKind } : {},
-    ...dataset.analyticsId ? { target_id: dataset.analyticsId } : {},
-    ...dataset.analyticsCta ? { cta: dataset.analyticsCta } : {},
-    ...dataset.analyticsPlacement ? { placement: dataset.analyticsPlacement } : {},
-    ...dataset.analyticsLinkKind ? { link_kind: dataset.analyticsLinkKind } : {},
-    ...dataset.analyticsInstallMethod ? { install_method: dataset.analyticsInstallMethod } : {}
-  };
-  if (typeof HTMLAnchorElement !== "undefined" && element instanceof HTMLAnchorElement) {
-    try {
-      const base = typeof window === "undefined" ? `https://${site.canonicalDomain}` : window.location.href;
-      const targetUrl = new URL(element.href, base);
-      if (targetUrl.protocol === "http:" || targetUrl.protocol === "https:") {
-        const targetHost = normalizeAnalyticsHostname(targetUrl.hostname);
-        rawProperties.target_host = targetHost.replace(/^www\./u, "");
-        if (isAllowedAnalyticsHost(site, targetHost)) {
-          const route = classifyAnalyticsRoute(site, targetUrl);
-          if (route) {
-            rawProperties.target_path = route.canonical_path;
-          }
-        }
-      }
-    } catch {}
-  }
-  return {
-    eventName,
-    properties: normalizeAnalyticsProperties(rawProperties)
-  };
-}
-function currentBrowserEvidence() {
-  if (typeof window === "undefined" || typeof document === "undefined") {
-    return null;
-  }
-  return {
-    hostname: window.location.hostname,
-    href: window.location.href,
-    referrer: document.referrer,
-    production: typeof process !== "undefined" && process.env["NODE_ENV"] === "production"
-  };
-}
-function isPostHogBrowserEligible(options) {
-  const evidence = options.evidence ?? currentBrowserEvidence();
-  return Boolean(evidence?.production && options.apiKey?.startsWith("phc_") && isAllowedAnalyticsHost(options.site, evidence.hostname));
-}
 function allowedEvent(site, eventName) {
   return BUILT_IN_EVENTS.has(eventName) || isAllowedCustomEvent(site, eventName);
 }
@@ -823,210 +605,239 @@ function createPostHogBeforeSend(site, resolveEvidence) {
     };
   };
 }
-function createPostHogBrowserConfig(site, evidence, apiHost = DEFAULT_API_HOST) {
-  const beforeSend = createPostHogBeforeSend(site, () => evidence);
+
+// src/testing.ts
+var HARNESS_API_KEY = "phc_harness";
+var HARNESS_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+function harnessPath() {
+  for (const candidate of ["./testing-harness.js", "./testing-harness.ts"]) {
+    const path = fileURLToPath(new URL(candidate, import.meta.url));
+    if (existsSync(path)) {
+      return path;
+    }
+  }
+  throw new Error("@hraness/posthog/testing: harness entry is missing from the package");
+}
+function decodeBody(base64) {
+  let bytes = Buffer.from(base64, "base64");
+  if (bytes[0] === 31 && bytes[1] === 139) {
+    bytes = gunzipSync(bytes);
+  }
+  let text = new TextDecoder().decode(bytes);
+  if (text.startsWith("data=")) {
+    text = Buffer.from(decodeURIComponent(text.slice(5)), "base64").toString("utf8");
+  }
+  const parsed = JSON.parse(text);
+  const batch = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object" && Array.isArray(parsed.batch) ? parsed.batch : [parsed];
+  return batch;
+}
+function runPostHogHarness(options) {
+  const input = JSON.stringify({
+    site: options.site,
+    apiKey: options.apiKey ?? HARNESS_API_KEY,
+    apiHost: options.apiHost,
+    userAgent: options.userAgent ?? HARNESS_USER_AGENT,
+    scenarios: options.scenarios
+  });
+  const child = spawnSync(options.runtime ?? process.execPath, [harnessPath()], {
+    input,
+    encoding: "utf8",
+    timeout: options.timeoutMs ?? 30000,
+    maxBuffer: 64 * 1024 * 1024
+  });
+  if (child.status !== 0) {
+    throw new Error(`@hraness/posthog/testing: harness exited ${String(child.status ?? child.signal)}
+${child.stderr}`);
+  }
+  const output = JSON.parse(child.stdout);
   return {
-    api_host: apiHost,
-    ui_host: apiHost.includes("eu.i.posthog.com") ? "https://eu.posthog.com" : "https://us.posthog.com",
-    defaults: "2026-05-30",
-    autocapture: false,
-    rageclick: false,
-    capture_pageview: "history_change",
-    capture_pageleave: true,
-    capture_performance: {
-      network_timing: false,
-      web_vitals: true,
-      web_vitals_allowed_metrics: ["LCP", "CLS", "FCP", "INP"],
-      web_vitals_attribution: false
-    },
-    capture_exceptions: false,
-    enable_recording_console_log: false,
-    capture_heatmaps: false,
-    capture_dead_clicks: false,
-    disable_session_recording: true,
-    disable_surveys: true,
-    disable_surveys_automatic_display: true,
-    disable_product_tours: true,
-    disable_conversations: true,
-    advanced_disable_flags: true,
-    advanced_disable_feature_flags: true,
-    advanced_disable_feature_flags_on_first_load: true,
-    person_profiles: "never",
-    persistence: "memory",
-    cookieless_mode: "always",
-    respect_dnt: true,
-    cross_subdomain_cookie: false,
-    disableDeviceModel: true,
-    disable_capture_url_hashes: true,
-    mask_all_text: true,
-    mask_all_element_attributes: true,
-    mask_personal_data_properties: false,
-    properties_string_max_length: 2048,
-    internal_or_test_user_hostname: null,
-    rate_limiting: {
-      events_per_second: 2,
-      events_burst_limit: 12
-    },
-    before_send: (capture) => getBrowserConsent()?.allowed() === true ? beforeSend(capture) : null
+    sent: output.sent.flatMap(decodeBody),
+    received: output.received,
+    returned: output.returned
   };
 }
-function initializePostHogBrowser(options) {
-  if (!isPostHogBrowserEligible(options)) {
-    return false;
-  }
-  const consent = getBrowserConsent();
-  consent?.start();
-  if (!consent?.allowed())
-    return false;
-  if (activeSiteId === options.site.id) {
-    return true;
-  }
-  const evidence = options.evidence ?? currentBrowserEvidence();
-  if (!evidence || !options.apiKey) {
-    return false;
-  }
-  posthog.init(options.apiKey, createPostHogBrowserConfig(options.site, evidence, options.apiHost));
-  activeSiteId = options.site.id;
-  return true;
+var REQUIRED_CONTRACT_PROPERTIES = [
+  "$host",
+  "$raw_user_agent",
+  "$current_url",
+  "$pathname",
+  "$referrer",
+  "$referring_domain",
+  "token",
+  "site_id",
+  "analytics_schema_version",
+  "canonical_path",
+  "page_kind",
+  "$cookieless_mode",
+  "distinct_id"
+];
+var PRESERVED_CONTRACT_PROPERTIES = [
+  "$session_id",
+  "$window_id",
+  "$pageview_id",
+  "$prev_pageview_id",
+  "$lib",
+  "$lib_version",
+  "$browser",
+  "$os",
+  "$device_type",
+  "$screen_height",
+  "$screen_width",
+  "$viewport_height",
+  "$viewport_width"
+];
+var LEAK_EMAIL = "person.contract@example.com";
+var LEAK_CODE = "oauthcontractcode123";
+var LEAK_PARAM = "private_contract_param";
+function propertyOf(event, key) {
+  return event.properties[key] ?? (key === "distinct_id" ? event["distinct_id"] : undefined);
 }
-function observePostHogBrowser(options, ready) {
-  if (!isPostHogBrowserEligible(options))
-    return () => {};
-  let cleanup;
-  let started = false;
-  const removeConsent = getBrowserConsent()?.subscribe(() => {
-    if (initializePostHogBrowser(options)) {
-      if (!started) {
-        started = true;
-        cleanup = ready();
+function checkPostHogContract(options) {
+  const { site } = options;
+  const origin = `https://${site.canonicalDomain}`;
+  const publicPath = options.publicPath ?? "/";
+  const publicHref = `${origin}${publicPath}?utm_source=contract&gclid=contractclick&email=${encodeURIComponent(LEAK_EMAIL)}&code=${LEAK_CODE}&${LEAK_PARAM}=1#fragment`;
+  const sensitiveHref = `${origin}${options.sensitivePath}?utm_source=contract&gclid=contractclick&code=${LEAK_CODE}`;
+  const referrer = "https://news.example.org/some/article/path?ref=contract";
+  const standard = [
+    { event: "$pageview" },
+    { event: "$pageleave" },
+    {
+      event: "$web_vitals",
+      properties: { $web_vitals_LCP_value: 1200, $web_vitals_LCP_event: { name: "LCP", value: 1200 } }
+    },
+    { event: "$exception", error: { name: "TypeError", message: `failed for ${LEAK_EMAIL}` } }
+  ];
+  const customEvents = options.customEvents ?? [];
+  const result = runPostHogHarness({
+    site,
+    ...options.runtime ? { runtime: options.runtime } : {},
+    scenarios: [
+      { href: publicHref, referrer, captures: [...standard, ...customEvents] },
+      { href: sensitiveHref, referrer, captures: [{ event: "$pageview" }] }
+    ]
+  });
+  const violations = [];
+  const publicEvents = result.sent.filter((event) => {
+    const url = propertyOf(event, "$current_url");
+    return typeof url === "string" && !url.includes(options.sensitivePath);
+  });
+  const sensitiveEvents = result.sent.filter((event) => !publicEvents.includes(event));
+  for (const expected of [...standard, ...customEvents]) {
+    if (!publicEvents.some((event) => event.event === expected.event)) {
+      violations.push(`${expected.event}: no request was sent`);
+    }
+  }
+  if (sensitiveEvents.length === 0) {
+    violations.push(`${options.sensitivePath}: no sensitive-path $pageview was sent`);
+  }
+  const receivedByUuid = new Map;
+  for (const value of result.received) {
+    if (value && typeof value === "object") {
+      const received = value;
+      receivedByUuid.set(received.uuid, received.properties ?? {});
+    }
+  }
+  for (const event of result.sent) {
+    const label = event.event;
+    const received = receivedByUuid.get(event["uuid"]) ?? {};
+    for (const key of PRESERVED_CONTRACT_PROPERTIES) {
+      if (received[key] !== undefined && received[key] !== null && propertyOf(event, key) !== received[key]) {
+        violations.push(`${label}: changed or dropped ${key}`);
       }
-    } else {
-      cleanup?.();
-      cleanup = undefined;
-      started = false;
     }
-  });
-  return () => {
-    removeConsent?.();
-    cleanup?.();
-  };
-}
-function capturePostHogEvent(site, eventName, properties = {}, options = {}) {
-  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
-    return false;
-  }
-  if (options.href !== undefined && !parseAnalyticsLocation(site, options.href)) {
-    return false;
-  }
-  posthog.capture(eventName, {
-    ...normalizeAnalyticsProperties(properties),
-    ...options.href ? { $current_url: options.href } : {}
-  }, {
-    ...options.transport ? { transport: options.transport } : {},
-    ...options.transport === "sendBeacon" ? { send_instantly: true } : options.send_instantly !== undefined ? { send_instantly: options.send_instantly } : {}
-  });
-  return true;
-}
-function capturePostHogException(site, value, properties = {}) {
-  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id) {
-    return false;
-  }
-  if (value && typeof value === "object") {
-    if (seenErrors.has(value)) {
-      return false;
+    for (const key of REQUIRED_CONTRACT_PROPERTIES) {
+      const value = propertyOf(event, key);
+      if (value === undefined || value === null || value === "") {
+        violations.push(`${label}: missing ${key}`);
+      }
     }
-    seenErrors.add(value);
-  }
-  const error = sanitizeAnalyticsError(value);
-  const fingerprint = analyticsErrorFingerprint(error);
-  if (!clientExceptionBudget.allow(fingerprint)) {
-    return false;
-  }
-  posthog.captureException(error, {
-    ...normalizeAnalyticsProperties(properties),
-    error_fingerprint: fingerprint,
-    error_surface: "client"
-  });
-  return true;
-}
-function installPostHogExceptionCapture(site) {
-  const onError = (event) => {
-    if (event.error instanceof Error) {
-      capturePostHogException(site, event.error, { error_origin: "window_error" });
+    if (propertyOf(event, "$cookieless_mode") !== true) {
+      violations.push(`${label}: $cookieless_mode is not true`);
     }
-  };
-  const onUnhandledRejection = (event) => {
-    capturePostHogException(site, event.reason, { error_origin: "unhandled_rejection" });
-  };
-  window.addEventListener("error", onError);
-  window.addEventListener("unhandledrejection", onUnhandledRejection);
-  return () => {
-    window.removeEventListener("error", onError);
-    window.removeEventListener("unhandledrejection", onUnhandledRejection);
-  };
-}
-function installDelegatedPostHogCapture(site) {
-  const onClick = (event) => {
-    if (event.button !== 0) {
-      return;
+    if (propertyOf(event, "site_id") !== site.id) {
+      violations.push(`${label}: site_id is not ${site.id}`);
     }
-    const delegated = readDelegatedAnalyticsEvent(site, event.target);
-    if (delegated) {
-      capturePostHogEvent(site, delegated.eventName, delegated.properties);
+    if (propertyOf(event, "analytics_schema_version") !== site.schemaVersion) {
+      violations.push(`${label}: analytics_schema_version is not ${String(site.schemaVersion)}`);
     }
-  };
-  document.addEventListener("click", onClick);
-  return () => {
-    document.removeEventListener("click", onClick);
-  };
-}
-function currentPathname() {
-  return typeof window === "undefined" ? null : window.location.pathname;
-}
-function currentReferrer() {
-  return typeof document === "undefined" ? "" : document.referrer;
-}
-function capturePostHogPageNotFound(site, input = {}) {
-  if (getBrowserConsent()?.allowed() !== true || activeSiteId !== site.id) {
-    return false;
+    const serialized = JSON.stringify(event);
+    for (const [leak, name] of [
+      [LEAK_EMAIL, "email"],
+      [LEAK_CODE, "OAuth code"],
+      [LEAK_PARAM, "non-attribution query parameter"],
+      ["#fragment", "fragment"],
+      ["/some/article/path", "third-party referrer path"]
+    ]) {
+      if (serialized.includes(leak)) {
+        violations.push(`${label}: leaked the ${name}`);
+      }
+    }
   }
-  const properties = pageNotFoundProperties({
-    requestedPath: input.requestedPath ?? currentPathname(),
-    referrer: input.referrer ?? currentReferrer()
-  });
-  if (!properties) {
-    return false;
+  for (const event of publicEvents) {
+    const label = event.event;
+    const currentUrl = String(propertyOf(event, "$current_url"));
+    let params = [];
+    try {
+      params = [...new URL(currentUrl).searchParams.keys()].sort();
+    } catch {
+      violations.push(`${label}: $current_url is not a URL`);
+    }
+    if (params.join(",") !== "gclid,utm_source") {
+      violations.push(`${label}: $current_url query is [${params.join(",")}], want [gclid,utm_source]`);
+    }
+    if (propertyOf(event, "utm_source") !== "contract") {
+      violations.push(`${label}: utm_source was not kept`);
+    }
+    if (propertyOf(event, "gclid") !== "contractclick") {
+      violations.push(`${label}: gclid was not kept`);
+    }
   }
-  posthog.capture(STANDARD_ANALYTICS_EVENTS.pageNotFound, properties);
-  return true;
-}
-function captureStandardEvent(site, eventName, properties) {
-  return properties !== null && capturePostHogEvent(site, eventName, properties);
-}
-function capturePostHogCtaClicked(site, input) {
-  return captureStandardEvent(site, STANDARD_ANALYTICS_EVENTS.ctaClicked, ctaClickedProperties(input));
-}
-function capturePostHogOutboundLinkOpened(site, input) {
-  return captureStandardEvent(site, STANDARD_ANALYTICS_EVENTS.outboundLinkOpened, outboundLinkOpenedProperties(input));
-}
-function capturePostHogInstallCommandCopied(site, input) {
-  return captureStandardEvent(site, STANDARD_ANALYTICS_EVENTS.installCommandCopied, installCommandCopiedProperties(input));
+  for (const event of sensitiveEvents) {
+    const serialized = JSON.stringify(event.properties);
+    if (String(propertyOf(event, "$current_url")).includes("?")) {
+      violations.push(`${event.event} on ${options.sensitivePath}: kept a query`);
+    }
+    if (serialized.includes("contractclick") || serialized.includes('"utm_source"')) {
+      violations.push(`${event.event} on ${options.sensitivePath}: kept attribution`);
+    }
+  }
+  for (const eventName of [...site.customEvents, ...site.delegatedEvents ?? []]) {
+    if (!isStandardAnalyticsEventName(eventName)) {
+      violations.push(`${eventName}: custom event name breaks the lowercase object-verb rule`);
+    }
+  }
+  for (const capture of customEvents) {
+    if (!site.customEvents.includes(capture.event) && !site.delegatedEvents?.includes(capture.event)) {
+      violations.push(`${capture.event}: not in the site's customEvents allowlist`);
+    }
+  }
+  const rejectedHosts = options.rejectedHosts ?? [
+    `preview.${site.canonicalDomain}`,
+    `${site.id.replace(/[^a-z0-9-]/gu, "-")}-git-branch.vercel.app`,
+    "localhost"
+  ];
+  for (const host of rejectedHosts) {
+    const href = `https://${host}${publicPath}`;
+    const beforeSend = createPostHogBeforeSend(site, () => ({ href, referrer: "" }));
+    const sample = beforeSend({
+      uuid: "00000000-0000-4000-8000-000000000000",
+      event: "$pageview",
+      properties: { token: HARNESS_API_KEY, $current_url: href, $host: host }
+    });
+    if (sample !== null) {
+      violations.push(`${host}: before_send did not return null`);
+    }
+  }
+  return { violations, result };
 }
 export {
-  readDelegatedAnalyticsEvent,
-  observePostHogBrowser,
-  isPostHogBrowserEligible,
-  installPostHogExceptionCapture,
-  installDelegatedPostHogCapture,
-  initializePostHogBrowser,
-  createPostHogBrowserConfig,
-  createPostHogBeforeSend,
-  capturePostHogPageNotFound,
-  capturePostHogOutboundLinkOpened,
-  capturePostHogInstallCommandCopied,
-  capturePostHogException,
-  capturePostHogEvent,
-  capturePostHogCtaClicked
+  runPostHogHarness,
+  checkPostHogContract,
+  REQUIRED_CONTRACT_PROPERTIES,
+  PRESERVED_CONTRACT_PROPERTIES,
+  HARNESS_USER_AGENT,
+  HARNESS_API_KEY
 };
 
-//# debugId=3FCDF4B518F79EB464756E2164756E21
+//# debugId=FFE3D101E85409F764756E2164756E21

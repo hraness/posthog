@@ -32,6 +32,18 @@ const groups: readonly BuildGroup[] = [
     entrypoints: ["src/server.ts", "src/next-config.ts"],
     target: "node",
   },
+  {
+    entrypoints: ["src/testing.ts"],
+    target: "node",
+  },
+  {
+    // The harness must define browser globals before posthog-js evaluates.
+    // Bundling would hoist the client's static posthog-js imports above that
+    // setup, so the harness loads the published client entry dynamically.
+    entrypoints: ["src/testing-harness.ts"],
+    target: "node",
+    external: ["./client*"],
+  },
 ];
 
 await rm("dist", { recursive: true, force: true });

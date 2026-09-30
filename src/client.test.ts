@@ -113,11 +113,7 @@ test("before-send drops unknown events and decorates approved events for SEO ana
 
 test("attributes ChatGPT UTM pageviews when the referrer is unavailable", () => {
   const href = "https://example.com/?utm_source=chatgpt.com&utm_term=private";
-  const privacySafeSite = {
-    ...site,
-    stripQueryAttribution: true,
-  } satisfies PostHogSiteDefinition;
-  const beforeSend = createPostHogBeforeSend(privacySafeSite, () => ({
+  const beforeSend = createPostHogBeforeSend(site, () => ({
     href,
     referrer: "",
   }));
@@ -134,13 +130,13 @@ test("attributes ChatGPT UTM pageviews when the referrer is unavailable", () => 
   });
 
   expect(capture?.properties).toMatchObject({
-    $current_url: "https://example.com/",
+    $current_url: "https://example.com/?utm_source=chatgpt.com&utm_term=private",
+    $host: "example.com",
     canonical_path: "/",
     traffic_channel: "ai_referral",
     traffic_source: "chatgpt",
+    utm_term: "private",
   });
-  expect(capture?.properties).not.toHaveProperty("$utm_source");
-  expect(capture?.properties).not.toHaveProperty("utm_term");
 });
 
 test("delegated links collapse owned routes and omit foreign paths", () => {
@@ -281,5 +277,17 @@ test("SDK entry points send no analytics before regional permission and stop aft
     initialized: 1, captured: 1, ready: 1, cleaned: 1,
     allowed: true, sends: true, denied: false, deniedSend: null,
     requests: [{ url: "https://account.hraness.com/api/consent/region", credentials: "omit" }],
+  });
+});
+
+test("a departing-page URL controls host and path while referrer paths remain private", () => {
+  const beforeSend = createPostHogBeforeSend(site, () => ({ href: "https://example.com/new", referrer: "" }));
+  const result = beforeSend({ uuid: "old-page", event: "cta opened", properties: {
+    token: "phc_public", $host: "spoofed.example", $current_url: "https://example.com/old",
+    $pathname: "/new", $session_entry_referrer: "https://outside.example/private?q=secret",
+  } });
+  expect(result?.properties).toMatchObject({
+    $host: "example.com", $pathname: "/old", canonical_path: "/old",
+    $session_entry_referrer: "https://outside.example",
   });
 });
