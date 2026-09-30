@@ -4,7 +4,8 @@ const allowedImports = new Map<string, ReadonlySet<string>>([
   ["site", new Set()],
   ["event", new Set()],
   ["traffic", new Set()],
-  ["client", new Set(["posthog-js", "posthog-js/dist/web-vitals.js"])],
+  ["consent", new Set()],
+  ["client", new Set(["./consent.js", "posthog-js", "posthog-js/dist/web-vitals.js"])],
   ["react", new Set(["./client.js", "react", "react/jsx-runtime"])],
   ["server", new Set(["posthog-node"])],
   ["next-config", new Set(["@posthog/nextjs-config"])],
@@ -32,7 +33,7 @@ for (const [entry, allowed] of allowedImports) {
   }
 }
 
-const browserEntries = ["site", "event", "traffic", "client", "react"];
+const browserEntries = ["site", "event", "traffic", "consent", "client", "react"];
 for (const entry of browserEntries) {
   const source = await readFile(`dist/${entry}.js`, "utf8");
   for (const forbidden of ["posthog-node", "@posthog/nextjs-config", "node:"]) {
@@ -49,6 +50,9 @@ for (const entry of ["client", "react"]) {
 
 const clientSource = await readFile("dist/client.js", "utf8");
 const reactSource = await readFile("dist/react.js", "utf8");
+if (!clientSource.includes('from "./consent.js"') || clientSource.includes("let browserConsent")) {
+  throw new Error("client must reuse the provider-free consent entry singleton");
+}
 if (!/import\s*["']posthog-js\/dist\/web-vitals\.js["'];/u.test(clientSource)) {
   throw new Error("client must bundle Web Vitals callbacks instead of loading a remote script");
 }
@@ -71,7 +75,7 @@ if (unexpectedArtifacts.length > 0) {
   throw new Error(`build emitted unstable shared artifacts: ${unexpectedArtifacts.join(", ")}`);
 }
 
-const pureEntries = ["site", "event", "traffic"];
+const pureEntries = ["site", "event", "traffic", "consent"];
 for (const entry of pureEntries) {
   const source = await readFile(`dist/${entry}.js`, "utf8");
   for (const forbidden of ["posthog-js", "posthog-node", "react", "next"]) {

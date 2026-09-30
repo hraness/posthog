@@ -206,6 +206,9 @@ const [clientSource, reactSource] = await Promise.all([
   readFile(clientPath, "utf8"),
   readFile(reactPath, "utf8"),
 ]);
+if (!clientSource.includes('from "./consent.js"') || clientSource.includes("let browserConsent")) {
+  throw new Error("installed client does not share the consent entry singleton");
+}
 if (!clientSource.includes('process.env["NODE_ENV"] === "production"')) {
   throw new Error("installed client does not evaluate production at runtime");
 }
