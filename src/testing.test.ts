@@ -25,6 +25,33 @@ const site = {
   unknownCanonicalPath: "/not-found",
 } satisfies PostHogSiteDefinition;
 
+test("real SDK removes organic search text derived from a referrer", () => {
+  const keyword = "private-search-canary";
+  const result = runPostHogHarness({
+    site,
+    scenarios: [{
+      href: "https://example.com/",
+      referrer: `https://www.google.com/search?q=${keyword}`,
+      captures: [{ event: "$pageview" }],
+    }],
+  });
+  // Prove that the SDK produced the derived field before our sanitizer ran.
+  expect(result.received.some((event) => {
+    if (typeof event !== "object" || event === null || !("properties" in event)) return false;
+    const properties = event.properties;
+    return typeof properties === "object" && properties !== null
+      && "ph_keyword" in properties && properties.ph_keyword === keyword;
+  })).toBe(true);
+  expect(result.sent).toHaveLength(1);
+  expect(result.sent[0]?.properties).toMatchObject({
+    $referrer: "https://www.google.com",
+    traffic_channel: "organic_search",
+    traffic_source: "google",
+  });
+  expect(JSON.stringify(result.sent)).not.toContain(keyword);
+  expect(result.sent[0]?.properties).not.toHaveProperty("ph_keyword");
+}, 30_000);
+
 test("real posthog-js requests meet the observability test contract", () => {
   const report = checkPostHogContract({
     site,

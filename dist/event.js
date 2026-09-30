@@ -146,6 +146,7 @@ var DROPPED_CAMPAIGN_PROPERTY_NAMES = new Set([
   "_kx",
   "campaign_params",
   "gclsrc",
+  "ph_keyword",
   "qclid",
   "ref"
 ]);
@@ -588,4 +589,4 @@ export {
   ANALYTICS_ATTRIBUTION_PARAMETERS
 };
 
-//# debugId=D6BF5B4401B8DC4F64756E2164756E21
+//# debugId=884DE38059DCA35064756E2164756E21

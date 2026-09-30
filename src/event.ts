@@ -61,12 +61,14 @@ export const ANALYTICS_ATTRIBUTION_PARAMETERS = [
 
 const ATTRIBUTION_PARAMETER_NAMES: ReadonlySet<string> = new Set(ANALYTICS_ATTRIBUTION_PARAMETERS);
 
-// Campaign-shaped provider properties outside the keep-list. Klaviyo `_kx`
-// and similar values can point to one person, so they never leave the page.
+// Provider attribution outside the keep-list. Klaviyo `_kx` can identify a
+// person; `ph_keyword` copies private search text out of a referrer's query.
+// URL redaction alone does not remove these separately derived properties.
 const DROPPED_CAMPAIGN_PROPERTY_NAMES: ReadonlySet<string> = new Set([
   "_kx",
   "campaign_params",
   "gclsrc",
+  "ph_keyword",
   "qclid",
   "ref",
 ]);

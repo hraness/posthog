@@ -145,6 +145,7 @@ var DROPPED_CAMPAIGN_PROPERTY_NAMES = new Set([
   "_kx",
   "campaign_params",
   "gclsrc",
+  "ph_keyword",
   "qclid",
   "ref"
 ]);
@@ -724,4 +725,4 @@ export {
   capturePostHogEvent
 };
 
-//# debugId=33F04B92AD4A3D5964756E2164756E21
+//# debugId=E1C1BA17DC76700A64756E2164756E21
