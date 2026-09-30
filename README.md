@@ -18,17 +18,17 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.3.4 from its GitHub
+> This repository does not publish the package to npm. Install version 0.3.5 from its GitHub
 > release tag, as shown below.
 
 ## Quick start
 
-Pin the Git source release with framework versions inside the supported peer ranges:
+Pin the verified immutable GitHub Release tarball with framework versions inside the supported peer ranges:
 
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "github:hraness/posthog#v0.3.4",
+    "@hraness/posthog": "https://github.com/hraness/posthog/releases/download/v0.3.5/hraness-posthog-0.3.5.tgz",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -250,7 +250,7 @@ observability failure does not change the request error path.
 | Server exception budget | Allows at most 30 exceptions per rolling minute and three occurrences per fingerprint. Provider failures are swallowed. |
 | Provider destination | Defaults to PostHog's US ingestion host. A caller that supplies `apiHost` owns approval of that destination. |
 
-Version 0.3.4 ignores `stripQueryAttribution`. List private routes in `sensitivePaths` instead.
+Version 0.3.5 ignores the deprecated `stripQueryAttribution` option, even when it is `true`. When upgrading a site that previously required query-free analytics, replace `stripQueryAttribution: true` with `attributionMode: "referrer_only"` in its site definition and regression fixtures before deploying. List individual private routes in `sensitivePaths`.
 For a referrer-only site, set `attributionMode: "referrer_only"`. This removes campaign
 queries and properties on every route, including initial and session-entry values,
 and classifies traffic only from the referrer. The default `"campaign"` mode keeps
@@ -446,3 +446,11 @@ The package is available under the [MIT License](LICENSE).
 Maintained by [Hraness](https://hraness.com).
 
 Private routes can opt out completely with `excludedPaths`. Use `allowedPaths` to limit analytics to a public section. Both accept `{ match: "exact" | "prefix", path: string }` rules; prefixes match path segments, exclusions win, and an empty allowlist disables all routes. The client checks both the live and captured URL before sending, including after SPA navigation. Server helpers use the same route policy. `sensitivePaths` only removes attribution; it does not exclude events.
+
+### Private missing pages and purchase deduplication
+
+The missing-page reporter honors `unknownCanonicalPath`, so a site that collapses unknown URLs to `/private` keeps that policy in `requested_path` too. Excluded requested paths are not captured.
+
+`capturePostHogEvent(..., { uuid })` and `<PostHogEventReporter uuid={uuid} ... />` accept a valid, stable event UUID for verified conversions. Derive it server-side from an event-scoped secret and transaction identity; never send the raw order, session, or customer identifier. The pinned SDK emits this value as the top-level event `uuid`. PostHog can eventually deduplicate matching UUIDs; capture still sends retries, and immediate exactly-once delivery is not guaranteed. A `$insert_id` property alone is not this transport option.
+
+To count outbound links on a public site, register `"outbound link opened"` in `customEvents` and pass `captureOutboundLinks` to `<PostHogAnalytics>`. This opt-in observer records only the external HTTP(S) hostname and a bounded placement. Owned host aliases, non-web links, private routes, and declined consent are excluded. The default installs no outbound observer; link text, external paths, queries, and fragments are never sent.

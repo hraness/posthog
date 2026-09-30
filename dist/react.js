@@ -9,20 +9,23 @@ import {
   observePostHogBrowser,
   initializePostHogBrowser,
   installDelegatedPostHogCapture,
+  installPostHogOutboundCapture,
   installPostHogExceptionCapture
 } from "./client.js";
 function PostHogAnalytics(props) {
-  const { apiHost, apiKey, site } = props;
+  const { apiHost, apiKey, site, captureOutboundLinks = false } = props;
   useEffect(() => {
     return observePostHogBrowser({ apiHost, apiKey, site }, () => {
       const removeExceptions = installPostHogExceptionCapture(site);
       const removeDelegated = installDelegatedPostHogCapture(site);
+      const removeOutbound = captureOutboundLinks ? installPostHogOutboundCapture(site) : () => {};
       return () => {
+        removeOutbound();
         removeDelegated();
         removeExceptions();
       };
     });
-  }, [apiHost, apiKey, site]);
+  }, [apiHost, apiKey, site, captureOutboundLinks]);
   return null;
 }
 function PostHogExceptionReporter(props) {
@@ -37,17 +40,17 @@ function PostHogExceptionReporter(props) {
   return null;
 }
 function PostHogEventReporter(props) {
-  const { apiHost, apiKey, eventName, properties, site } = props;
+  const { apiHost, apiKey, eventName, properties, site, uuid } = props;
   useEffect(() => {
     let sent = false;
     return observePostHogBrowser({ apiHost, apiKey, site }, () => {
       if (!sent) {
         sent = true;
-        capturePostHogEvent(site, eventName, properties);
+        capturePostHogEvent(site, eventName, properties, uuid ? { uuid } : {});
       }
       return;
     });
-  }, [apiHost, apiKey, eventName, properties, site]);
+  }, [apiHost, apiKey, eventName, properties, site, uuid]);
   return null;
 }
 function PostHogPageNotFound(props) {
@@ -71,4 +74,4 @@ export {
   PostHogAnalytics
 };
 
-//# debugId=E0E7410D3DBC689B64756E2164756E21
+//# debugId=7E0B3FAB3774D48B64756E2164756E21

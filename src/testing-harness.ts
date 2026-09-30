@@ -10,6 +10,7 @@ import type { PostHogSiteDefinition } from "./site.js";
 
 type HarnessCapture = Readonly<{
   event: string;
+  uuid?: string;
   properties?: Record<string, unknown>;
   error?: Readonly<{ name?: string; message: string; stack?: string }>;
 }>;
@@ -169,6 +170,7 @@ for (const scenario of input.scenarios) {
       posthog.capture(capture.event, capture.properties ?? {}, {
         send_instantly: true,
         transport: "fetch",
+        ...(capture.uuid ? { uuid: capture.uuid } : {}),
       });
     }
     const accepted = returned.slice(before).filter((value) => value !== null).length;

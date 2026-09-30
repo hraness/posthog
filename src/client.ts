@@ -346,7 +346,7 @@ export function capturePostHogEvent(
   site: PostHogSiteDefinition,
   eventName: string,
   properties: unknown = {},
-  options: Readonly<{ transport?: "fetch" | "sendBeacon"; send_instantly?: boolean; href?: string }> = {},
+  options: Readonly<{ transport?: "fetch" | "sendBeacon"; send_instantly?: boolean; href?: string; uuid?: string }> = {},
 ): boolean {
   if (getBrowserConsent()?.allowed() !== true || !liveRouteAllowed(site) || activeSiteId !== site.id || !isAllowedCustomEvent(site, eventName)) {
     return false;
@@ -354,10 +354,12 @@ export function capturePostHogEvent(
   if (options.href !== undefined && !classifyAnalyticsRoute(site, options.href)) {
     return false;
   }
+  if (options.uuid !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(options.uuid)) return false;
   posthog.capture(eventName, {
     ...normalizeAnalyticsProperties(properties),
     ...(options.href ? { $current_url: options.href } : {}),
   }, {
+    ...(options.uuid ? { uuid: options.uuid } : {}),
     ...(options.transport ? { transport: options.transport } : {}),
     ...(options.transport === "sendBeacon" ? { send_instantly: true }
       : options.send_instantly !== undefined ? { send_instantly: options.send_instantly } : {}),
@@ -425,6 +427,26 @@ export function installDelegatedPostHogCapture(site: PostHogSiteDefinition): () 
   };
 }
 
+/** Opt-in bounded outbound clicks; consent and the current route are checked for every event. */
+export function installPostHogOutboundCapture(site: PostHogSiteDefinition): () => void {
+  if (!isAllowedCustomEvent(site, STANDARD_ANALYTICS_EVENTS.outboundLinkOpened)) return () => {};
+  const onClick = (event: MouseEvent): void => {
+    if (event.button !== 0 || event.defaultPrevented || !(event.target instanceof Element)) return;
+    const anchor = event.target.closest("a[href]");
+    if (!anchor || anchor.getAttribute("data-analytics-event") === STANDARD_ANALYTICS_EVENTS.outboundLinkOpened) return;
+    try {
+      const url = new URL(anchor.getAttribute("href") ?? "", window.location.href);
+      if (!/^https?:$/u.test(url.protocol) || isAllowedAnalyticsHost(site, url.hostname)) return;
+      const region = anchor.closest("header, footer, [data-hraness-marketing]");
+      const name = region?.getAttribute("data-hraness-marketing") ?? region?.tagName.toLowerCase();
+      const placement = name === "hero" ? "hero" : name === "header" ? "nav" : name === "footer" ? "footer" : "inline";
+      capturePostHogOutboundLinkOpened(site, { targetHost: url.hostname, placement });
+    } catch { /* Invalid links produce no analytics. */ }
+  };
+  document.addEventListener("click", onClick);
+  return () => { document.removeEventListener("click", onClick); };
+}
+
 export type { AnalyticsProperties };
 
 function currentPathname(): string | null {
@@ -446,8 +468,15 @@ export function capturePostHogPageNotFound(
   if (getBrowserConsent()?.allowed() !== true || !liveRouteAllowed(site) || activeSiteId !== site.id) {
     return false;
   }
+  const requestedPath = input.requestedPath ?? currentPathname();
+  if (requestedPath === null) return false;
+  let requestedRoute;
+  try {
+    requestedRoute = classifyAnalyticsRoute(site, new URL(requestedPath, `https://${site.canonicalDomain}`).href);
+  } catch { return false; }
+  if (!requestedRoute) return false;
   const properties = pageNotFoundProperties({
-    requestedPath: input.requestedPath ?? currentPathname(),
+    requestedPath: requestedRoute.canonical_path,
     referrer: input.referrer ?? currentReferrer(),
   });
   if (!properties) {

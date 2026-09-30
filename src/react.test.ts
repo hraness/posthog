@@ -46,3 +46,27 @@ test("mounted event and 404 reporters wait for permission and send once", () => 
     before: [], denied: [], captured: ["cta clicked", "page not found"],
   });
 });
+
+test("outbound listeners are opt-in, allowlisted, and removed with consent observers", () => {
+  const result = execFileSync(process.execPath, ["--eval", `
+    import { mock } from "bun:test";
+    import { posthog } from "posthog-js";
+    const effects = [];
+    mock.module("react", () => ({ useEffect: (effect) => effects.push(effect) }));
+    const events = new EventTarget();
+    globalThis.window = { location: new URL("https://example.com/"), localStorage: { getItem: () => "accepted" }, addEventListener: (...args) => events.addEventListener(...args), removeEventListener: (...args) => events.removeEventListener(...args) };
+    const clicks = new Set();
+    globalThis.document = { referrer: "", addEventListener: (type, handler) => { if (type === "click") clicks.add(handler); }, removeEventListener: (type, handler) => { if (type === "click") clicks.delete(handler); } };
+    process.env.NODE_ENV = "production";
+    posthog.init = () => {};
+    const react = await import(${JSON.stringify(import.meta.dir + "/react.tsx")});
+    const site = { id: "react-example", canonicalDomain: "example.com", allowedHosts: ["example.com"], schemaVersion: 2, routes: [], customEvents: ["outbound link opened"] };
+    const counts = [];
+    for (const options of [{}, { captureOutboundLinks: true }, { captureOutboundLinks: true, site: { ...site, customEvents: [] } }]) {
+      react.PostHogAnalytics({ site, apiKey: "phc_public", ...options });
+      const dispose = effects.pop()(); counts.push(clicks.size); dispose(); counts.push(clicks.size);
+    }
+    console.log(JSON.stringify(counts));
+  `], { encoding: "utf8", timeout: 10_000 });
+  expect(JSON.parse(result)).toEqual([1, 0, 2, 0, 1, 0]);
+});

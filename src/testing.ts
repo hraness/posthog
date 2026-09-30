@@ -15,6 +15,7 @@ import { isAllowedAnalyticsPath, type PostHogSiteDefinition } from "./site.js";
 
 export type PostHogHarnessCapture = Readonly<{
   event: string;
+  uuid?: string;
   properties?: Record<string, unknown>;
   /** Captured through `posthog.captureException` instead of `posthog.capture`. */
   error?: Readonly<{ name?: string; message: string; stack?: string }>;

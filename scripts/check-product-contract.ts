@@ -76,7 +76,7 @@ await Promise.all(
 );
 requireText(
   readme,
-  `github:hraness/posthog#v${packageVersion}`,
+  `https://github.com/hraness/posthog/releases/download/v${packageVersion}/hraness-posthog-${packageVersion}.tgz`,
   "README.md",
 );
 requireText(readme, "does not publish the package to npm", "README.md");
@@ -130,6 +130,21 @@ if (packageComponent.version !== packageVersion) {
 
 requireText(releaseWorkflow, 'gh release create "$GITHUB_REF_NAME"', "release workflow");
 requireText(releaseWorkflow, ".isImmutable", "release workflow");
+for (const required of [
+  "bun pm pack --ignore-scripts --filename",
+  "hraness-posthog-${GITHUB_REF_NAME#v}.tgz",
+  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+  "sha256sum --check SHA256SUMS",
+  '"release/$package_file" release/SHA256SUMS',
+  'gh release edit "$GITHUB_REF_NAME" --draft=false --latest',
+  "\\tfalse\\tfalse\\ttrue\\t2",
+  'cmp release/SHA256SUMS "$published_dir/SHA256SUMS"',
+]) requireText(releaseWorkflow, required, "canonical release artifact workflow");
+if (releaseWorkflow.indexOf("sha256sum --check SHA256SUMS") > releaseWorkflow.indexOf("gh release create")
+  || releaseWorkflow.indexOf("gh release edit") < releaseWorkflow.indexOf("gh release create")) {
+  throw new Error("release artifacts must be verified before draft creation and published only after upload");
+}
 if (/\b(?:bun|npm)\s+publish\b/u.test(releaseWorkflow)) {
   throw new Error("release workflow must not publish to a package registry");
 }
