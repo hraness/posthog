@@ -198,6 +198,8 @@ properties. The React adapter installs and removes the click listener.
 Only an event listed in `delegatedEvents` is accepted. Owned links contribute a canonical path;
 foreign links contribute a hostname but not their path or query.
 
+Client exceptions that occur before regional permission or acceptance are dropped; they are not replayed later.
+
 ## Send server events
 
 Use the server export from a payment webhook or another trusted server handler. It requires

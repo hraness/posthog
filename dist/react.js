@@ -39,9 +39,14 @@ function PostHogExceptionReporter(props) {
 function PostHogEventReporter(props) {
   const { apiHost, apiKey, eventName, properties, site } = props;
   useEffect(() => {
-    if (!initializePostHogBrowser({ apiHost, apiKey, site }))
+    let sent = false;
+    return observePostHogBrowser({ apiHost, apiKey, site }, () => {
+      if (!sent) {
+        sent = true;
+        capturePostHogEvent(site, eventName, properties);
+      }
       return;
-    capturePostHogEvent(site, eventName, properties);
+    });
   }, [apiHost, apiKey, eventName, properties, site]);
   return null;
 }
@@ -66,4 +71,4 @@ export {
   PostHogAnalytics
 };
 
-//# debugId=AB853A8303A3B0C664756E2164756E21
+//# debugId=E0E7410D3DBC689B64756E2164756E21

@@ -54,8 +54,11 @@ export function PostHogEventReporter(
 ) {
   const { apiHost, apiKey, eventName, properties, site } = props;
   useEffect(() => {
-    if (!initializePostHogBrowser({ apiHost, apiKey, site })) return;
-    capturePostHogEvent(site, eventName, properties);
+    let sent = false;
+    return observePostHogBrowser({ apiHost, apiKey, site }, () => {
+      if (!sent) { sent = true; capturePostHogEvent(site, eventName, properties); }
+      return undefined;
+    });
   }, [apiHost, apiKey, eventName, properties, site]);
   return null;
 }
