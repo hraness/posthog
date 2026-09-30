@@ -126,7 +126,8 @@ for (const scenario of input.scenarios) {
     } else {
       posthog.capture(capture.event, capture.properties ?? {}, {
         send_instantly: true,
-        transport: "fetch"
+        transport: "fetch",
+        ...capture.uuid ? { uuid: capture.uuid } : {}
       });
     }
     const accepted = returned.slice(before).filter((value) => value !== null).length;
@@ -136,4 +137,4 @@ for (const scenario of input.scenarios) {
 process.stdout.write(JSON.stringify({ sent, received, returned }));
 process.exit(0);
 
-//# debugId=987D3AB551FB636B64756E2164756E21
+//# debugId=2E951EF171C329EE64756E2164756E21

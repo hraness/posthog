@@ -65,7 +65,19 @@ jobs:
             printf '%s\n' "$generated_status"
             exit 1
           fi
-      - run: bun pm pack --dry-run --ignore-scripts
+      - name: Pack verified release artifact
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          package_file="hraness-posthog-${GITHUB_REF_NAME#v}.tgz"
+          bun pm pack --ignore-scripts --filename "release/$package_file"
+          (cd release && sha256sum "$package_file" > SHA256SUMS)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-package
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
 
   publish:
     name: Publish
@@ -82,6 +94,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-package
+          path: release
       - name: Publish verified GitHub Release
         run: |
           set -euo pipefail
@@ -89,16 +105,28 @@ jobs:
             echo "::error::Publish request does not match the verified tag"
             exit 1
           fi
+          package_file="hraness-posthog-${VERIFIED_TAG#v}.tgz"
+          test -f "release/$package_file"
+          test "$(find release -type f | wc -l)" -eq 2
+          (cd release && sha256sum --check SHA256SUMS)
           gh release create "$GITHUB_REF_NAME" \
+            "release/$package_file" release/SHA256SUMS \
             --verify-tag \
             --generate-notes \
-            --latest \
+            --draft \
             --title "PostHog $GITHUB_REF_NAME"
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
           release_state="$(gh release view "$GITHUB_REF_NAME" \
             --json assets,isDraft,isImmutable,isPrerelease,tagName \
             --jq '[.tagName, .isDraft, .isPrerelease, .isImmutable, (.assets | length)] | @tsv')"
-          expected_state="$GITHUB_REF_NAME"$'\tfalse\tfalse\ttrue\t0'
+          expected_state="$GITHUB_REF_NAME"$'\tfalse\tfalse\ttrue\t2'
           if [[ "$release_state" != "$expected_state" ]]; then
             echo "::error::Release $GITHUB_REF_NAME is not published and immutable"
             exit 1
           fi
+          published_dir="$RUNNER_TEMP/posthog-published"
+          mkdir -p "$published_dir"
+          gh release download "$GITHUB_REF_NAME" --dir "$published_dir" \
+            --pattern "$package_file" --pattern SHA256SUMS
+          cmp release/SHA256SUMS "$published_dir/SHA256SUMS"
+          (cd "$published_dir" && sha256sum --check SHA256SUMS)

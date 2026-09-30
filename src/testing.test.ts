@@ -159,3 +159,14 @@ test("real SDK honors referrer-only attribution on every route", () => {
     expect(JSON.stringify(event.properties)).not.toMatch(/utm_source|gclid|contractclick/);
   }
 });
+
+test("stable UUIDs reach actual SDK wire events across independent page loads", () => {
+  const uuid = "01234567-89ab-4def-abcd-0123456789ab";
+  const options = { site, scenarios: [{ href: "https://example.com/", captures: [{ event: "cta clicked", uuid }] }] };
+  const first = runPostHogHarness(options).sent;
+  const reloaded = runPostHogHarness(options).sent;
+  expect(first).toHaveLength(1);
+  expect(reloaded).toHaveLength(1);
+  expect(first[0]?.uuid).toBe(uuid);
+  expect(reloaded[0]?.uuid).toBe(uuid);
+});

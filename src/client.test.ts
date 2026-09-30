@@ -338,3 +338,59 @@ test("a queued public event on a sensitive browser route loses attribution for t
     expect(JSON.stringify(event)).not.toMatch(/utm_source|gclid|oldcampaign|chatgpt/);
   }
 });
+
+test("404 capture preserves private path collapse and custom events forward valid UUIDs", () => {
+  const result = execFileSync(process.execPath, ["-e", `
+    const { posthog } = await import("posthog-js");
+    const events = new EventTarget();
+    globalThis.window = { location: new URL("https://example.com/person-jane/1986-04-05"), localStorage: { getItem: () => "accepted" }, addEventListener: (...args) => events.addEventListener(...args), removeEventListener: (...args) => events.removeEventListener(...args) };
+    const captures = [];
+    posthog.init = () => {};
+    posthog.capture = (...args) => { captures.push(args); };
+    const client = await import(${JSON.stringify(import.meta.dir + "/client.ts")});
+    const site = { ...${JSON.stringify(site)}, unknownCanonicalPath: "/private", excludedPaths: [{ match: "prefix", path: "/account" }] };
+    client.initializePostHogBrowser({ site, evidence: ${JSON.stringify(evidence)}, apiKey: "phc_public" });
+    client.capturePostHogPageNotFound(site);
+    client.capturePostHogPageNotFound(site, { requestedPath: "/?name=Jane" });
+    const excluded = client.capturePostHogPageNotFound(site, { requestedPath: "/account/jane" });
+    client.capturePostHogEvent(site, "cta opened", {}, { uuid: "01234567-89ab-4def-abcd-0123456789ab" });
+    const invalid = client.capturePostHogEvent(site, "cta opened", {}, { uuid: "private-session" });
+    console.log(JSON.stringify({ captures, excluded, invalid }));
+  `], { encoding: "utf8", timeout: 10_000 });
+  expect(JSON.parse(result)).toEqual({ captures: [
+    ["page not found", { requested_path: "/private" }],
+    ["page not found", { requested_path: "/" }],
+    ["cta opened", {}, { uuid: "01234567-89ab-4def-abcd-0123456789ab" }],
+  ], excluded: false, invalid: false });
+  expect(result).not.toMatch(/person-jane|1986-04-05|private-session/);
+});
+
+test("opt-in outbound capture excludes owned aliases, non-web links, private navigation, and removed listeners", () => {
+  const result = execFileSync(process.execPath, ["-e", `
+    const { posthog } = await import("posthog-js");
+    const events = new EventTarget();
+    let choice = "accepted";
+    globalThis.window = { location: new URL("https://example.com/"), localStorage: { getItem: () => choice }, addEventListener: (...args) => events.addEventListener(...args), removeEventListener: (...args) => events.removeEventListener(...args) };
+    globalThis.document = new EventTarget();
+    class Anchor { constructor(href) { this.href = href; } closest(selector) { return selector === "a[href]" ? this : null; } getAttribute(name) { return name === "href" ? this.href : null; } }
+    globalThis.Element = Anchor;
+    const captures = [];
+    posthog.init = () => {};
+    posthog.capture = (...args) => captures.push(args);
+    const client = await import(${JSON.stringify(import.meta.dir + "/client.ts")});
+    const site = { ...${JSON.stringify(site)}, allowedHosts: ["example.com", "www.example.com"], customEvents: ["outbound link opened"], excludedPaths: [{ match: "prefix", path: "/account" }] };
+    client.initializePostHogBrowser({ site, evidence: ${JSON.stringify(evidence)}, apiKey: "phc_public" });
+    function click(href) { const event = new Event("click"); Object.defineProperties(event, { target: { value: new Anchor(href) }, button: { value: 0 } }); document.dispatchEvent(event); }
+    const noop = client.installPostHogOutboundCapture({ ...site, customEvents: [] });
+    click("https://outside.example/ignored"); noop();
+    const dispose = client.installPostHogOutboundCapture(site);
+    click("https://www.example.com/alias"); click("mailto:person@example.com"); click("javascript:void(0)");
+    click("https://outside.example/private-path?email=private#secret");
+    window.location = new URL("https://example.com/account/jane"); click("https://outside.example/private");
+    window.location = new URL("https://example.com/");
+    choice = "declined"; const declined = new Event("storage"); Object.defineProperty(declined, "key", { value: "hraness-consent-cookies-v1" }); events.dispatchEvent(declined); click("https://outside.example/declined");
+    dispose(); choice = "accepted"; events.dispatchEvent(new Event("hraness-consent-accepted")); click("https://outside.example/removed");
+    console.log(JSON.stringify(captures));
+  `], { encoding: "utf8", timeout: 10_000 });
+  expect(JSON.parse(result)).toEqual([["outbound link opened", { target_host: "outside.example", placement: "inline" }, {}]]);
+});

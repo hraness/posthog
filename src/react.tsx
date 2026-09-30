@@ -7,6 +7,7 @@ import {
   observePostHogBrowser,
   initializePostHogBrowser,
   installDelegatedPostHogCapture,
+  installPostHogOutboundCapture,
   installPostHogExceptionCapture,
   type PostHogBrowserOptions,
 } from "./client.js";
@@ -18,18 +19,20 @@ export type PostHogAnalyticsProps = Readonly<{
   apiHost?: string | undefined;
 }>;
 
-export function PostHogAnalytics(props: PostHogAnalyticsProps) {
-  const { apiHost, apiKey, site } = props;
+export function PostHogAnalytics(props: PostHogAnalyticsProps & Readonly<{ captureOutboundLinks?: boolean }>) {
+  const { apiHost, apiKey, site, captureOutboundLinks = false } = props;
   useEffect(() => {
     return observePostHogBrowser({ apiHost, apiKey, site }, () => {
       const removeExceptions = installPostHogExceptionCapture(site);
       const removeDelegated = installDelegatedPostHogCapture(site);
+      const removeOutbound = captureOutboundLinks ? installPostHogOutboundCapture(site) : () => {};
       return () => {
+        removeOutbound();
         removeDelegated();
         removeExceptions();
       };
     });
-  }, [apiHost, apiKey, site]);
+  }, [apiHost, apiKey, site, captureOutboundLinks]);
   return null;
 }
 
@@ -50,16 +53,18 @@ export function PostHogEventReporter(
   props: PostHogAnalyticsProps & Readonly<{
     eventName: string;
     properties?: unknown;
+    /** Stable event UUID for provider-side eventual deduplication. */
+    uuid?: string;
   }>,
 ) {
-  const { apiHost, apiKey, eventName, properties, site } = props;
+  const { apiHost, apiKey, eventName, properties, site, uuid } = props;
   useEffect(() => {
     let sent = false;
     return observePostHogBrowser({ apiHost, apiKey, site }, () => {
-      if (!sent) { sent = true; capturePostHogEvent(site, eventName, properties); }
+      if (!sent) { sent = true; capturePostHogEvent(site, eventName, properties, uuid ? { uuid } : {}); }
       return undefined;
     });
-  }, [apiHost, apiKey, eventName, properties, site]);
+  }, [apiHost, apiKey, eventName, properties, site, uuid]);
   return null;
 }
 

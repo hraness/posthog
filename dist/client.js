@@ -957,10 +957,13 @@ function capturePostHogEvent(site, eventName, properties = {}, options = {}) {
   if (options.href !== undefined && !classifyAnalyticsRoute(site, options.href)) {
     return false;
   }
+  if (options.uuid !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(options.uuid))
+    return false;
   posthog.capture(eventName, {
     ...normalizeAnalyticsProperties(properties),
     ...options.href ? { $current_url: options.href } : {}
   }, {
+    ...options.uuid ? { uuid: options.uuid } : {},
     ...options.transport ? { transport: options.transport } : {},
     ...options.transport === "sendBeacon" ? { send_instantly: true } : options.send_instantly !== undefined ? { send_instantly: options.send_instantly } : {}
   });
@@ -1019,6 +1022,30 @@ function installDelegatedPostHogCapture(site) {
     document.removeEventListener("click", onClick);
   };
 }
+function installPostHogOutboundCapture(site) {
+  if (!isAllowedCustomEvent(site, STANDARD_ANALYTICS_EVENTS.outboundLinkOpened))
+    return () => {};
+  const onClick = (event) => {
+    if (event.button !== 0 || event.defaultPrevented || !(event.target instanceof Element))
+      return;
+    const anchor = event.target.closest("a[href]");
+    if (!anchor || anchor.getAttribute("data-analytics-event") === STANDARD_ANALYTICS_EVENTS.outboundLinkOpened)
+      return;
+    try {
+      const url = new URL(anchor.getAttribute("href") ?? "", window.location.href);
+      if (!/^https?:$/u.test(url.protocol) || isAllowedAnalyticsHost(site, url.hostname))
+        return;
+      const region = anchor.closest("header, footer, [data-hraness-marketing]");
+      const name = region?.getAttribute("data-hraness-marketing") ?? region?.tagName.toLowerCase();
+      const placement = name === "hero" ? "hero" : name === "header" ? "nav" : name === "footer" ? "footer" : "inline";
+      capturePostHogOutboundLinkOpened(site, { targetHost: url.hostname, placement });
+    } catch {}
+  };
+  document.addEventListener("click", onClick);
+  return () => {
+    document.removeEventListener("click", onClick);
+  };
+}
 function currentPathname() {
   return typeof window === "undefined" ? null : window.location.pathname;
 }
@@ -1029,8 +1056,19 @@ function capturePostHogPageNotFound(site, input = {}) {
   if (getBrowserConsent()?.allowed() !== true || !liveRouteAllowed(site) || activeSiteId !== site.id) {
     return false;
   }
+  const requestedPath = input.requestedPath ?? currentPathname();
+  if (requestedPath === null)
+    return false;
+  let requestedRoute;
+  try {
+    requestedRoute = classifyAnalyticsRoute(site, new URL(requestedPath, `https://${site.canonicalDomain}`).href);
+  } catch {
+    return false;
+  }
+  if (!requestedRoute)
+    return false;
   const properties = pageNotFoundProperties({
-    requestedPath: input.requestedPath ?? currentPathname(),
+    requestedPath: requestedRoute.canonical_path,
     referrer: input.referrer ?? currentReferrer()
   });
   if (!properties) {
@@ -1055,6 +1093,7 @@ export {
   readDelegatedAnalyticsEvent,
   observePostHogBrowser,
   isPostHogBrowserEligible,
+  installPostHogOutboundCapture,
   installPostHogExceptionCapture,
   installDelegatedPostHogCapture,
   initializePostHogBrowser,
@@ -1068,4 +1107,4 @@ export {
   capturePostHogCtaClicked
 };
 
-//# debugId=185D4BC026F0BDEC64756E2164756E21
+//# debugId=FCDBFEC6F75C3A5F64756E2164756E21
