@@ -147,6 +147,7 @@ var DROPPED_CAMPAIGN_PROPERTY_NAMES = new Set([
   "_kx",
   "campaign_params",
   "gclsrc",
+  "ph_keyword",
   "qclid",
   "ref"
 ]);
@@ -886,4 +887,4 @@ export {
   HARNESS_API_KEY
 };
 
-//# debugId=7686683E7967F67864756E2164756E21
+//# debugId=19A2DFF342C89C9664756E2164756E21
