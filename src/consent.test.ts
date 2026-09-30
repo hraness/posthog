@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import fc from "fast-check";
-import { AnalyticsConsent, type ConsentEnvironment } from "./consent";
+import { AnalyticsConsent, installConsentTransport, type ConsentEnvironment } from "./consent";
 
 function fixture(body: unknown = { required: false }, ok = true) {
   let choice: string | null = null;
@@ -86,4 +86,95 @@ test("all arbitrary region payloads require literal false in a successful object
     expect(f.consent.allowed()).toBe(ok && typeof body === "object" && body !== null
       && !Array.isArray(body) && Reflect.get(body, "required") === false);
   }));
+});
+
+
+test("withdrawal aborts pending requests and stale retries before notifying observers", async () => {
+  const f = fixture();
+  f.consent.start();
+  expect(f.consent.requestSignal().aborted).toBe(true);
+  await f.settle();
+  const granted = f.consent.requestSignal();
+  expect(granted.aborted).toBe(false);
+  const remove = f.consent.subscribe(() => {
+    if (!f.consent.allowed()) expect(granted.aborted).toBe(true);
+  });
+  f.choose("declined");
+  expect(granted.aborted).toBe(true);
+  f.accept();
+  const accepted = f.consent.requestSignal();
+  expect(accepted).not.toBe(granted);
+  expect(accepted.aborted).toBe(false);
+  expect(granted.aborted).toBe(true);
+  f.choose("rejected");
+  expect(accepted.aborted).toBe(true);
+  remove();
+});
+
+
+test("the final transport drops stale retries after reacceptance and forces abortable page leaves", async () => {
+  const f = fixture(); f.consent.start(); await f.settle();
+  const requests: Record<string, unknown>[] = [];
+  const provider = { version: "1.422.5", config: { request_batching: false }, _send_request: (options: Record<string, unknown>) => { requests.push(options); } };
+  expect(installConsentTransport(provider, f.consent)).toBe(true);
+  expect(installConsentTransport(provider, f.consent)).toBe(true);
+  const data = { event: "$pageview" };
+  provider._send_request({ data, transport: "sendBeacon" });
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.transport).toBe("fetch");
+  expect(requests[0]?.disableTransport).toEqual(["XHR", "sendBeacon"]);
+  const signal = (requests[0]?.fetchOptions as { signal: AbortSignal }).signal;
+  f.choose("declined"); expect(signal.aborted).toBe(true);
+  let dropped = 0;
+  const retry = { data, callback: (response: { statusCode: number }) => { expect(response.statusCode).toBe(400); dropped++; } };
+  provider._send_request(retry);
+  f.accept(); provider._send_request(retry);
+  expect(requests).toHaveLength(1); expect(dropped).toBe(2);
+  provider._send_request({ data: { event: "$pageleave" }, transport: "sendBeacon" });
+  expect(requests).toHaveLength(2);
+  expect((requests[1]?.fetchOptions as { signal: AbortSignal }).signal.aborted).toBe(false);
+  provider._send_request({ data: "unknown payload", callback: retry.callback });
+  expect(requests).toHaveLength(2); expect(dropped).toBe(3);
+  provider.config.request_batching = true;
+  provider._send_request({ data: { event: "$pageview" }, callback: retry.callback });
+  expect(requests).toHaveLength(2); expect(dropped).toBe(4);
+  expect(installConsentTransport({}, f.consent)).toBe(false);
+});
+
+
+test("consent signals retain the provider's request timeout", async () => {
+  const f = fixture(); f.consent.start(); await f.settle();
+  let signal: AbortSignal | undefined;
+  const provider = { version: "1.422.5", config: { request_batching: false }, _send_request: (options: Record<string, unknown>) => {
+    signal = (options.fetchOptions as { signal: AbortSignal }).signal;
+  } };
+  installConsentTransport(provider, f.consent);
+  provider._send_request({ data: { event: "$pageview" }, timeout: 5 });
+  await new Promise(resolve => setTimeout(resolve, 15));
+  expect(signal?.aborted).toBe(true);
+  expect(f.consent.allowed()).toBe(true);
+  expect(f.consent.requestSignal().aborted).toBe(false);
+});
+
+
+test("transport preserves the caller's cancellation signal", async () => {
+  const f = fixture(); f.consent.start(); await f.settle();
+  const caller = new AbortController(); let signal: AbortSignal | undefined;
+  const provider = { version: "1.422.5", config: { request_batching: false, fetch_options: { signal: caller.signal } }, _send_request: (options: Record<string, unknown>) => {
+    signal = (options.fetchOptions as { signal: AbortSignal }).signal;
+  } };
+  installConsentTransport(provider, f.consent);
+  provider._send_request({ data: { event: "$pageview" } });
+  caller.abort();
+  expect(signal?.aborted).toBe(true);
+  expect(f.consent.requestSignal().aborted).toBe(false);
+});
+
+
+test("unqualified providers fail closed before initialization", async () => {
+  const f = fixture(); f.consent.start(); await f.settle();
+  for (const version of [undefined, "1.434.5", "2.0.0"]) {
+    const provider = { version, _send_request: () => {} };
+    expect(installConsentTransport(provider, f.consent)).toBe(false);
+  }
 });

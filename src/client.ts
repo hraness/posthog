@@ -32,7 +32,7 @@ import {
   parseAnalyticsLocation,
   type PostHogSiteDefinition,
 } from "./site.js";
-import { getBrowserConsent } from "./consent.js";
+import { getBrowserConsent, installConsentTransport } from "./consent.js";
 import { classifyAnalyticsTraffic } from "./traffic.js";
 
 const BUILT_IN_EVENTS = new Set([
@@ -306,7 +306,7 @@ export function initializePostHogBrowser(options: PostHogBrowserOptions): boolea
   }
   const consent = getBrowserConsent();
   consent?.start();
-  if (!consent?.allowed()) return false;
+  if (!consent?.allowed() || !installConsentTransport(posthog, consent)) return false;
   if (activeSiteId === options.site.id) {
     return true;
   }
