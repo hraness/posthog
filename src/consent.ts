@@ -17,7 +17,11 @@ export class AnalyticsConsent {
   private started = false;
   private readonly listeners = new Set<() => void>();
 
-  constructor(private readonly environment: ConsentEnvironment) {}
+  private readonly environment: ConsentEnvironment;
+
+  constructor(environment: ConsentEnvironment) {
+    this.environment = environment;
+  }
 
   allowed(): boolean {
     return !this.denied && (this.accepted || this.regionAllows);

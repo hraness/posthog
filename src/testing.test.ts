@@ -144,3 +144,13 @@ test("contract accepts excluded private routes only when no request is sent", ()
     publicPath: "/pricing", sensitivePath: "/auth/callback",
   }).violations).toEqual([]);
 });
+
+test("real SDK honors referrer-only attribution on every route", () => {
+  const report = checkPostHogContract({ site: { ...site, attributionMode: "referrer_only" }, sensitivePath: "/auth/callback" });
+  expect(report.violations).toEqual([]);
+  for (const event of report.result.sent) {
+    expect(String(event.properties.$current_url)).not.toContain("?");
+    expect(event.properties.traffic_source).toBe("news.example.org");
+    expect(JSON.stringify(event.properties)).not.toMatch(/utm_source|gclid|contractclick/);
+  }
+});

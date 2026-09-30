@@ -302,3 +302,38 @@ test("excluded or non-public initial URLs cannot initialize analytics", () => {
   }
   expect(isPostHogBrowserEligible({ ...options, evidence: { ...evidence, href: "https://example.com/eds/docs" } })).toBe(true);
 });
+
+test("referrer-only mode discards campaign URL, nested properties, and derived traffic", () => {
+  const referrerOnly = { ...site, attributionMode: "referrer_only" as const };
+  const href = "https://example.com/?utm_source=chatgpt&gclid=campaign-click#secret";
+  const beforeSend = createPostHogBeforeSend(referrerOnly, () => ({ href, referrer: "https://www.google.com/search?q=private" }));
+  const result = beforeSend({ uuid: "referrer-only", event: "$pageview", properties: {
+    token: "phc_public", $current_url: href, $initial_current_url: href, $session_entry_url: href,
+    utm_source: "chatgpt", gclid: "campaign-click", $initial_gclid: "campaign-click",
+    $session_entry_utm_source: "chatgpt", $set: { utm_source: "chatgpt", $initial_gclid: "campaign-click" },
+    $set_once: { $initial_utm_source: "chatgpt", $initial_current_url: href },
+  } });
+  expect(result?.properties).toMatchObject({
+    $current_url: "https://example.com/", $initial_current_url: "https://example.com/",
+    $session_entry_url: "https://example.com/", traffic_channel: "organic_search", traffic_source: "google",
+    $set: {}, $set_once: { $initial_current_url: "https://example.com/" },
+  });
+  expect(JSON.stringify(result)).not.toMatch(/chatgpt|campaign-click|utm_source|gclid|#secret/);
+});
+
+test("a queued public event on a sensitive browser route loses attribution for this browser instance", () => {
+  const guarded = { ...site, sensitivePaths: [{ match: "prefix" as const, path: "/auth" }] };
+  let href = "https://example.com/auth/callback?utm_source=chatgpt";
+  const beforeSend = createPostHogBeforeSend(guarded, () => ({ href, referrer: "https://bing.com/search" }));
+  const capture = () => beforeSend({ uuid: "queued", event: "$pageleave", properties: {
+    token: "phc_public", $current_url: "https://example.com/?utm_source=chatgpt&gclid=oldcampaign", utm_source: "chatgpt", gclid: "oldcampaign",
+    $initial_current_url: "https://example.com/?utm_source=chatgpt", $set: { $initial_utm_source: "chatgpt" },
+  } });
+  const queued = capture();
+  href = "https://example.com/?utm_source=chatgpt";
+  const later = capture();
+  for (const event of [queued, later]) {
+    expect(event?.properties).toMatchObject({ $current_url: "https://example.com/", traffic_source: "bing", traffic_channel: "organic_search" });
+    expect(JSON.stringify(event)).not.toMatch(/utm_source|gclid|oldcampaign|chatgpt/);
+  }
+});

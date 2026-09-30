@@ -34,6 +34,8 @@ export type PostHogSiteDefinition = Readonly<{
    * invite links, and any user-owned or private route.
    */
   sensitivePaths?: readonly AnalyticsPathRule[];
+  /** Referrer-only sites discard all campaign queries and properties, including traffic classification. */
+  attributionMode?: "campaign" | "referrer_only";
   /**
    * @deprecated Since 0.3.0 the query is always reduced to the campaign
    * attribution keep-list (`utm_*` and ad click IDs), so this option has no
