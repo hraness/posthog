@@ -3,6 +3,16 @@ export const CONSENT_REGION_URL = "https://account.hraness.com/api/consent/regio
 export const CONSENT_STORAGE_KEY = "hraness-consent-cookies-v1";
 export const CONSENT_ACCEPTED_EVENT = "hraness-consent-accepted";
 
+/** The SDK ignores respect_dnt in cookieless mode, so enforce it independently. */
+export function browserDoNotTrackEnabled(): boolean {
+  const browserNavigator = typeof navigator === "undefined" ? undefined : navigator;
+  const browserWindow = typeof window === "undefined" ? undefined : window;
+  return [browserNavigator?.doNotTrack,
+    browserNavigator && Reflect.get(browserNavigator, "msDoNotTrack"),
+    browserWindow && Reflect.get(browserWindow, "doNotTrack")]
+    .some(value => value === "1" || value === 1 || value === "yes");
+}
+
 export type ConsentEnvironment = Readonly<{
   readChoice: () => string | null;
   requestRegion: () => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
@@ -25,7 +35,7 @@ export class AnalyticsConsent {
   }
 
   allowed(): boolean {
-    return !this.denied && (this.accepted || this.regionAllows);
+    return !browserDoNotTrackEnabled() && !this.denied && (this.accepted || this.regionAllows);
   }
 
   /** A revoked generation stays aborted even when a later choice grants consent. */

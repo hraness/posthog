@@ -19,6 +19,7 @@ type HarnessScenario = Readonly<{
   href: string;
   referrer?: string;
   title?: string;
+  doNotTrack?: string | null;
   captures: readonly HarnessCapture[];
 }>;
 
@@ -27,6 +28,7 @@ type HarnessInput = Readonly<{
   apiKey: string;
   apiHost?: string;
   userAgent: string;
+  doNotTrack?: string | null;
   scenarios: readonly HarnessScenario[];
 }>;
 
@@ -64,7 +66,7 @@ const browserGlobals: Record<string, unknown> = {
   document: pageDocument,
   location: pageLocation,
   navigator: {
-    doNotTrack: null,
+    doNotTrack: input.doNotTrack ?? null,
     language: "en-US",
     languages: ["en-US"],
     onLine: true,
@@ -152,6 +154,7 @@ async function drain(expected: number): Promise<void> {
 }
 
 for (const scenario of input.scenarios) {
+  if (scenario.doNotTrack !== undefined) Reflect.set(navigator, "doNotTrack", scenario.doNotTrack);
   const next = new URL(scenario.href);
   pageLocation.href = next.href;
   pageDocument.URL = next.href;

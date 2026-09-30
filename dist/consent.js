@@ -2,6 +2,15 @@
 var CONSENT_REGION_URL = "https://account.hraness.com/api/consent/region";
 var CONSENT_STORAGE_KEY = "hraness-consent-cookies-v1";
 var CONSENT_ACCEPTED_EVENT = "hraness-consent-accepted";
+function browserDoNotTrackEnabled() {
+  const browserNavigator = typeof navigator === "undefined" ? undefined : navigator;
+  const browserWindow = typeof window === "undefined" ? undefined : window;
+  return [
+    browserNavigator?.doNotTrack,
+    browserNavigator && Reflect.get(browserNavigator, "msDoNotTrack"),
+    browserWindow && Reflect.get(browserWindow, "doNotTrack")
+  ].some((value) => value === "1" || value === 1 || value === "yes");
+}
 
 class AnalyticsConsent {
   regionAllows = false;
@@ -15,7 +24,7 @@ class AnalyticsConsent {
     this.environment = environment;
   }
   allowed() {
-    return !this.denied && (this.accepted || this.regionAllows);
+    return !browserDoNotTrackEnabled() && !this.denied && (this.accepted || this.regionAllows);
   }
   requestSignal() {
     if (!this.transportController || this.allowed() && this.transportController.signal.aborted) {
@@ -156,10 +165,11 @@ function installConsentTransport(provider, consent = getBrowserConsent()) {
 export {
   installConsentTransport,
   getBrowserConsent,
+  browserDoNotTrackEnabled,
   CONSENT_STORAGE_KEY,
   CONSENT_REGION_URL,
   CONSENT_ACCEPTED_EVENT,
   AnalyticsConsent
 };
 
-//# debugId=2DC031854EA29DEE64756E2164756E21
+//# debugId=A0C066D3E382716464756E2164756E21

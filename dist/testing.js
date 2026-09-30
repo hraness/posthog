@@ -413,6 +413,87 @@ function isStandardAnalyticsEventName(eventName) {
   return eventName.length <= MAX_EVENT_NAME_LENGTH && EVENT_NAME_PATTERN.test(eventName);
 }
 
+// src/consent.ts
+function browserDoNotTrackEnabled() {
+  const browserNavigator = typeof navigator === "undefined" ? undefined : navigator;
+  const browserWindow = typeof window === "undefined" ? undefined : window;
+  return [
+    browserNavigator?.doNotTrack,
+    browserNavigator && Reflect.get(browserNavigator, "msDoNotTrack"),
+    browserWindow && Reflect.get(browserWindow, "doNotTrack")
+  ].some((value) => value === "1" || value === 1 || value === "yes");
+}
+
+class AnalyticsConsent {
+  regionAllows = false;
+  accepted = false;
+  denied = false;
+  started = false;
+  transportController;
+  listeners = new Set;
+  environment;
+  constructor(environment) {
+    this.environment = environment;
+  }
+  allowed() {
+    return !browserDoNotTrackEnabled() && !this.denied && (this.accepted || this.regionAllows);
+  }
+  requestSignal() {
+    if (!this.transportController || this.allowed() && this.transportController.signal.aborted) {
+      this.transportController = new AbortController;
+    }
+    if (!this.allowed())
+      this.transportController.abort();
+    return this.transportController.signal;
+  }
+  publish() {
+    this.requestSignal();
+    for (const listener of this.listeners)
+      listener();
+  }
+  readChoice() {
+    let choice = null;
+    try {
+      choice = this.environment.readChoice();
+    } catch {}
+    this.accepted = choice === "accepted";
+    this.denied = choice !== null && choice !== "accepted";
+  }
+  start() {
+    if (this.started)
+      return;
+    this.started = true;
+    this.readChoice();
+    this.environment.listen(() => {
+      this.readChoice();
+      this.publish();
+    }, () => {
+      this.accepted = true;
+      this.denied = false;
+      this.publish();
+    });
+    if (this.accepted || this.denied)
+      return;
+    this.environment.requestRegion().then(async (response) => {
+      const body = await response.json();
+      this.regionAllows = response.ok && typeof body === "object" && body !== null && !Array.isArray(body) && Reflect.get(body, "required") === false;
+      this.publish();
+    }).catch(() => {
+      this.regionAllows = false;
+      this.publish();
+    });
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    this.start();
+    listener();
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+}
+var guardedProviders = new WeakMap;
+
 // src/traffic.ts
 var AI_SOURCES = [
   ["chatgpt", ["chatgpt.com", "chat.openai.com"]],
@@ -585,6 +666,8 @@ function allowedEvent(site, eventName) {
 function createPostHogBeforeSend(site, resolveEvidence) {
   let sensitiveAttributionSeen = false;
   return (capture) => {
+    if (browserDoNotTrackEnabled())
+      return null;
     if (!liveRouteAllowed(site)) {
       sensitiveAttributionSeen = true;
       return null;
@@ -673,6 +756,7 @@ function runPostHogHarness(options) {
     apiKey: options.apiKey ?? HARNESS_API_KEY,
     apiHost: options.apiHost,
     userAgent: options.userAgent ?? HARNESS_USER_AGENT,
+    doNotTrack: options.doNotTrack,
     scenarios: options.scenarios
   });
   const child = spawnSync(options.runtime ?? process.execPath, [harnessPath()], {
@@ -887,4 +971,4 @@ export {
   HARNESS_API_KEY
 };
 
-//# debugId=19A2DFF342C89C9664756E2164756E21
+//# debugId=1B75907456B8497964756E2164756E21

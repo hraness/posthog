@@ -570,7 +570,7 @@ function installCommandCopiedProperties(input) {
 }
 
 // src/client.ts
-import { getBrowserConsent, installConsentTransport } from "./consent.js";
+import { browserDoNotTrackEnabled, getBrowserConsent, installConsentTransport } from "./consent.js";
 
 // src/traffic.ts
 var AI_SOURCES = [
@@ -795,7 +795,7 @@ function liveRouteAllowed(site) {
 }
 function isPostHogBrowserEligible(options) {
   const evidence = options.evidence ?? currentBrowserEvidence();
-  return Boolean(evidence?.production && options.apiKey?.startsWith("phc_") && isAllowedAnalyticsHost(options.site, evidence.hostname) && classifyAnalyticsRoute(options.site, evidence.href) !== null && liveRouteAllowed(options.site));
+  return Boolean(!browserDoNotTrackEnabled() && evidence?.production && options.apiKey?.startsWith("phc_") && isAllowedAnalyticsHost(options.site, evidence.hostname) && classifyAnalyticsRoute(options.site, evidence.href) !== null && liveRouteAllowed(options.site));
 }
 function allowedEvent(site, eventName) {
   return BUILT_IN_EVENTS.has(eventName) || isAllowedCustomEvent(site, eventName);
@@ -803,6 +803,8 @@ function allowedEvent(site, eventName) {
 function createPostHogBeforeSend(site, resolveEvidence) {
   let sensitiveAttributionSeen = false;
   return (capture) => {
+    if (browserDoNotTrackEnabled())
+      return null;
     if (!liveRouteAllowed(site)) {
       sensitiveAttributionSeen = true;
       return null;
@@ -1108,4 +1110,4 @@ export {
   capturePostHogCtaClicked
 };
 
-//# debugId=239992C7D9BEC4B564756E2164756E21
+//# debugId=B4A909A3FC6BBFC764756E2164756E21

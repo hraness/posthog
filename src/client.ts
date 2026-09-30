@@ -32,7 +32,7 @@ import {
   parseAnalyticsLocation,
   type PostHogSiteDefinition,
 } from "./site.js";
-import { getBrowserConsent, installConsentTransport } from "./consent.js";
+import { browserDoNotTrackEnabled, getBrowserConsent, installConsentTransport } from "./consent.js";
 import { classifyAnalyticsTraffic } from "./traffic.js";
 
 const BUILT_IN_EVENTS = new Set([
@@ -146,7 +146,8 @@ function liveRouteAllowed(site: PostHogSiteDefinition): boolean {
 export function isPostHogBrowserEligible(options: PostHogBrowserOptions): boolean {
   const evidence = options.evidence ?? currentBrowserEvidence();
   return Boolean(
-    evidence?.production
+    !browserDoNotTrackEnabled()
+    && evidence?.production
     && options.apiKey?.startsWith("phc_")
     && isAllowedAnalyticsHost(options.site, evidence.hostname)
     && classifyAnalyticsRoute(options.site, evidence.href) !== null
@@ -164,6 +165,7 @@ export function createPostHogBeforeSend(
 ): (capture: CaptureResult | null) => CaptureResult | null {
   let sensitiveAttributionSeen = false;
   return (capture) => {
+    if (browserDoNotTrackEnabled()) return null;
     if (!liveRouteAllowed(site)) { sensitiveAttributionSeen = true; return null; }
     if (!capture || !allowedEvent(site, capture.event)) {
       return null;

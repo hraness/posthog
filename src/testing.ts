@@ -25,6 +25,7 @@ export type PostHogHarnessScenario = Readonly<{
   href: string;
   referrer?: string;
   title?: string;
+  doNotTrack?: string | null;
   captures: readonly PostHogHarnessCapture[];
 }>;
 
@@ -34,6 +35,7 @@ export type PostHogHarnessOptions = Readonly<{
   apiKey?: string;
   apiHost?: string;
   userAgent?: string;
+  doNotTrack?: string | null;
   scenarios: readonly PostHogHarnessScenario[];
   /** Runtime for the child process. Defaults to the current executable (bun or node). */
   runtime?: string;
@@ -94,6 +96,7 @@ export function runPostHogHarness(options: PostHogHarnessOptions): PostHogHarnes
     apiKey: options.apiKey ?? HARNESS_API_KEY,
     apiHost: options.apiHost,
     userAgent: options.userAgent ?? HARNESS_USER_AGENT,
+    doNotTrack: options.doNotTrack,
     scenarios: options.scenarios,
   });
   const child = spawnSync(options.runtime ?? process.execPath, [harnessPath()], {
