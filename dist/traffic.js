@@ -33,8 +33,11 @@ function emailSpans(value) {
         break;
       start -= width;
     }
+    const candidateStart = start;
     while (start < at && /^[._%+-]$/u.test(value.charAt(start)))
       start += 1;
+    if (start === at)
+      start = candidateStart;
     previousAt = at;
     if (start === at)
       continue;
@@ -411,4 +414,4 @@ export {
   classifyAnalyticsTraffic
 };
 
-//# debugId=6B8C821661658C5E64756E2164756E21
+//# debugId=76C16495A8E6FE6064756E2164756E21

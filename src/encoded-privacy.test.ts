@@ -178,3 +178,15 @@ test("punctuated URL credentials and adjacent raw or encoded emails redact indep
     expect(sanitizeProviderProperties(site, { text: input }).text).toBe(output);
   }
 });
+
+test("punctuation-only email local parts remain redacted without consuming adjacent separators", () => {
+  for (const local of ["+", "_", "%", "-", ".", ".%+-_"]) {
+    const email = `${local}@a.aa`;
+    for (const input of [email, encodeURIComponent(email), encodeURIComponent(encodeURIComponent(email))]) {
+      expect(redactSensitiveText(`/notes/${input}/end%2F`)).toBe("/notes/[email]/end%2F");
+      expect(sanitizeProviderProperties(site, { text: input }).text).toBe("[email]");
+    }
+  }
+  expect(redactSensitiveText("a@b.com+c@d.com")).toBe("[email]+[email]");
+  expect(redactSensitiveText("a%40b.com%2Bc%40d.com")).toBe("[email]%2B[email]");
+});

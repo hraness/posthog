@@ -26,7 +26,7 @@ tarball with framework versions inside the supported peer ranges:
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "https://github.com/hraness/posthog/releases/download/v0.3.10/hraness-posthog-0.3.10.tgz",
+    "@hraness/posthog": "https://github.com/hraness/posthog/releases/download/v0.3.11/hraness-posthog-0.3.11.tgz",
     "next": "16.2.12",
     "react": "19.2.3"
   }

@@ -33,8 +33,11 @@ function emailSpans(value) {
         break;
       start -= width;
     }
+    const candidateStart = start;
     while (start < at && /^[._%+-]$/u.test(value.charAt(start)))
       start += 1;
+    if (start === at)
+      start = candidateStart;
     previousAt = at;
     if (start === at)
       continue;
@@ -273,4 +276,4 @@ export {
   POSTHOG_SCHEMA_VERSION
 };
 
-//# debugId=84E7993CB9D65A6364756E2164756E21
+//# debugId=8CF3195DAB22124664756E2164756E21

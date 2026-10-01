@@ -33,8 +33,11 @@ function emailSpans(value: string): Span[] {
       if (!/^[\p{L}\p{N}\p{M}._%+-]+$/u.test(value.slice(start - width, start))) break;
       start -= width;
     }
-    // Preserve punctuation separating neighboring email addresses.
+    // Preserve punctuation separating neighboring email addresses, but retain
+    // a nonempty local part when it consists entirely of allowed punctuation.
+    const candidateStart = start;
     while (start < at && /^[._%+-]$/u.test(value.charAt(start))) start += 1;
+    if (start === at) start = candidateStart;
     previousAt = at;
     if (start === at) continue;
     domain.lastIndex = at;
@@ -157,4 +160,3 @@ export function redactSensitiveText(value: string): string {
     .replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1")
     .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=([^\s&]+)/giu, "$1=[redacted]"));
 }
-
