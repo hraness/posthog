@@ -21,7 +21,9 @@ function percentCharacter(value: string, index: number): Readonly<{ text: string
 
 function emailSpans(value: string): Span[] {
   const result: Span[] = [];
-  const domain = /@[\p{L}\p{N}\p{M}.-]+\.[\p{L}\p{M}]{2,}/uy;
+  // Keep Unicode properties native: Next's bundled Babel cannot expand them.
+  const domain = new RegExp(String.raw`@[\p{L}\p{N}\p{M}.-]+\.[\p{L}\p{M}]{2,}`, "uy");
+  const localCharacter = new RegExp(String.raw`^[\p{L}\p{N}\p{M}._%+-]+$`, "u");
   let previousAt = -1;
   let previousEnd = 0;
   for (let at = value.indexOf("@"); at >= 0; at = value.indexOf("@", at + 1)) {
@@ -30,7 +32,7 @@ function emailSpans(value: string): Span[] {
     while (start > floor) {
       const unit = value.charCodeAt(start - 1);
       const width = unit >= 0xdc00 && unit <= 0xdfff && start - 2 >= floor ? 2 : 1;
-      if (!/^[\p{L}\p{N}\p{M}._%+-]+$/u.test(value.slice(start - width, start))) break;
+      if (!localCharacter.test(value.slice(start - width, start))) break;
       start -= width;
     }
     // Preserve punctuation separating neighboring email addresses, but retain

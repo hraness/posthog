@@ -20,7 +20,8 @@ function percentCharacter(value, index) {
 }
 function emailSpans(value) {
   const result = [];
-  const domain = /@[\p{L}\p{N}\p{M}.-]+\.[\p{L}\p{M}]{2,}/uy;
+  const domain = new RegExp(String.raw`@[\p{L}\p{N}\p{M}.-]+\.[\p{L}\p{M}]{2,}`, "uy");
+  const localCharacter = new RegExp(String.raw`^[\p{L}\p{N}\p{M}._%+-]+$`, "u");
   let previousAt = -1;
   let previousEnd = 0;
   for (let at = value.indexOf("@");at >= 0; at = value.indexOf("@", at + 1)) {
@@ -29,7 +30,7 @@ function emailSpans(value) {
     while (start > floor) {
       const unit = value.charCodeAt(start - 1);
       const width = unit >= 56320 && unit <= 57343 && start - 2 >= floor ? 2 : 1;
-      if (!/^[\p{L}\p{N}\p{M}._%+-]+$/u.test(value.slice(start - width, start)))
+      if (!localCharacter.test(value.slice(start - width, start)))
         break;
       start -= width;
     }
@@ -748,4 +749,4 @@ export {
   ANALYTICS_ATTRIBUTION_PARAMETERS
 };
 
-//# debugId=4B783A5AA9E697F564756E2164756E21
+//# debugId=30345CBB71BA927C64756E2164756E21
