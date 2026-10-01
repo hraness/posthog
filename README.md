@@ -18,12 +18,10 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
-> This repository does not publish the package to npm. Install version 0.3.9 from its GitHub
-> release tag, as shown below.
-
 ## Quick start
 
-Pin the verified immutable GitHub Release tarball with framework versions inside the supported peer ranges:
+This repository does not publish the package to npm. Pin its immutable GitHub Release
+tarball with framework versions inside the supported peer ranges:
 
 ```json
 {
@@ -103,6 +101,7 @@ The route check above loads no PostHog code, writes no cookie, and sends nothing
 | `@hraness/posthog` or `@hraness/posthog/site` | Provider-neutral | Host validation, route normalization, and canonical context | An `AnalyticsRouteContext` or `null` |
 | `@hraness/posthog/event` | Provider-neutral | Property normalization, provider sanitization, and exception budgets | Bounded properties, a sanitized error, or a budget decision |
 | `@hraness/posthog/traffic` | Provider-neutral | Direct, internal, search, AI, social, and referral attribution | An `AnalyticsTrafficContext` |
+| `@hraness/posthog/consent` | Browser, provider-neutral | Shared regional consent and withdrawal | A consent subscription and transport guard |
 | `@hraness/posthog/client` | Browser | Eligible PostHog.js initialization and approved event capture | `true` when accepted, `false` when inert |
 | `@hraness/posthog/react` | React client boundary | Browser initialization, delegated clicks, and exception reporting | Components that render no interface |
 | `@hraness/posthog/server` | Node | Next.js request errors and anonymous server events | An error callback or a delivery result |
@@ -162,8 +161,9 @@ const accepted = capturePostHogEvent(analyticsSite, "guide opened", {
 `accepted` is `false` until the matching site is initialized or when the event name is not in
 `customEvents`.
 
-The client export also sends the shared event names with checked properties. Each helper returns
-`false` unless the event is in `customEvents` and every property is valid:
+The client export also has helpers for `"cta clicked"`, `"install command copied"`, and
+`"outbound link opened"`. Add the names you use to `customEvents` in the site definition
+before calling these helpers. Each returns `false` if the event is undeclared or a property is invalid:
 
 ```ts
 import {
@@ -180,6 +180,10 @@ capturePostHogOutboundLinkOpened(analyticsSite, { targetHost: "github.com", plac
 Mount `PostHogPageNotFound` from `@hraness/posthog/react` in your 404 page. It sends one
 `page not found` event with the requested path, without its query or fragment, and the referring
 host.
+
+The missing-page reporter honors `unknownCanonicalPath`, so a site that collapses
+unknown URLs to `/private` keeps that policy in `requested_path` too. Excluded
+requested paths are not captured.
 
 For a declared delegated event, semantic HTML can carry the bounded event name and two normalized
 properties. The React adapter installs and removes the click listener.
@@ -200,9 +204,27 @@ foreign links contribute a hostname but not their path or query.
 
 Client exceptions that occur before regional permission or acceptance are dropped; they are not replayed later.
 
+### Count outbound links
+
+Register `"outbound link opened"` in `customEvents` and pass `captureOutboundLinks`
+to `<PostHogAnalytics>`. This opt-in observer records only the external HTTP(S)
+hostname and a bounded placement. Owned host aliases, non-web links, private routes,
+and declined consent are excluded. The default installs no outbound observer;
+link text, external paths, queries, and fragments are never sent.
+
+### Deduplicate browser conversions
+
+The browser `capturePostHogEvent(site, event, properties, { uuid })` and
+`<PostHogEventReporter uuid={uuid} ... />` accept a valid, stable event UUID for
+verified conversions. Derive it server-side from an event-scoped secret and transaction
+identity; never send the raw order, session, or customer identifier. The pinned SDK
+emits this value as the top-level event `uuid`. PostHog can eventually deduplicate
+matching UUIDs; capture still sends retries, and immediate exactly-once delivery is
+not guaranteed. A `$insert_id` property alone is not this transport option.
+
 ## Send server events
 
-Use the server export from a payment webhook or another trusted server handler. It requires
+Use the server export from a trusted server handler. It requires
 production, an allowed served hostname, and an event in `customEvents`. It sends a fixed
 anonymous server identity, removes sensitive properties, and returns `false` on delivery failure.
 Do not pass customer identifiers or user input.
@@ -211,9 +233,9 @@ Do not pass customer identifiers or user input.
 import { capturePostHogEvent } from "@hraness/posthog/server";
 
 await capturePostHogEvent({ site: analyticsSite, apiKey: process.env.NEXT_PUBLIC_POSTHOG_KEY }, {
-  event: "purchase completed",
-  hostname: "example.com",
-  properties: { product: "guide", price_tier: "standard", currency: "USD", value_bucket: "10_50" },
+  event: "guide opened",
+  hostname: "docs.example.com",
+  properties: { guide_kind: "reference" },
 });
 ```
 
@@ -250,26 +272,35 @@ observability failure does not change the request error path.
 | Server exception budget | Allows at most 30 exceptions per rolling minute and three occurrences per fingerprint. Provider failures are swallowed. |
 | Provider destination | Defaults to PostHog's US ingestion host. A caller that supplies `apiHost` owns approval of that destination. |
 
-Version 0.3.5 ignores the deprecated `stripQueryAttribution` option, even when it is `true`. When upgrading a site that previously required query-free analytics, replace `stripQueryAttribution: true` with `attributionMode: "referrer_only"` in its site definition and regression fixtures before deploying. List individual private routes in `sensitivePaths`.
-For a referrer-only site, set `attributionMode: "referrer_only"`. This removes campaign
-queries and properties on every route, including initial and session-entry values,
-and classifies traffic only from the referrer. The default `"campaign"` mode keeps
-allowlisted campaign attribution on public routes.
+### Choose attribution and route privacy
 
-Set `privacyMode: "minimal"` on your site definition when upgrading a site that
-previously discarded all query attribution. This mode removes every campaign
-query/property, including initial/session attribution, reduces owned and external
-referrers to origins, and restores PostHog's personal-data masking. Existing route
-rules and `unknownCanonicalPath` still control private/unknown path disclosure.
-The default `"standard"` mode retains the 0.3.1 attribution behavior; the deprecated
-`stripQueryAttribution` field remains ignored in that mode. List private routes
-in `sensitivePaths` when retaining attribution elsewhere.
+The default `attributionMode: "campaign"` keeps allowlisted campaign attribution on
+public routes. Set `attributionMode: "referrer_only"` to remove campaign queries and
+properties on every route, including initial and session-entry values, and classify
+traffic only from the referrer.
+
+Set `privacyMode: "minimal"` to also reduce owned and external referrers to origins
+and enable PostHog's personal-data masking. It removes campaign queries and
+properties, including initial and session attribution. The default `"standard"` mode
+keeps allowlisted campaign attribution unless `attributionMode` removes it.
+
+The deprecated `stripQueryAttribution` field has no effect. When upgrading a site
+that used it to discard query attribution, choose `"referrer_only"` or `"minimal"`
+and update the site's regression fixtures before deploying.
+
+Private routes can opt out completely with `excludedPaths`. Use `allowedPaths` to
+limit analytics to a public section. Both accept `{ match: "exact" | "prefix", path: string }`
+rules; prefixes match path segments, exclusions win, and an empty allowlist disables
+all routes. The client checks both the live and captured URL before sending,
+including after SPA navigation. Server helpers use the same route policy.
+`sensitivePaths` removes attribution but does not exclude events. Existing route
+rules and `unknownCanonicalPath` still control private and unknown path disclosure.
 
 Browser events use immediate fetch requests with a consent-scoped abort signal.
 Withdrawing consent aborts pending requests and their retries; accepting again
 allows new events without reviving earlier requests. Page leaves use fetch with
 keepalive instead of sendBeacon so they obey the same cancellation.
-Sites moving from 0.1.x send `analytics_schema_version: 2`.
+Events include `analytics_schema_version: 2`.
 
 ## Test your site against real PostHog.js
 
@@ -458,13 +489,3 @@ bun run check
 The package is available under the [MIT License](LICENSE).
 
 Maintained by [Hraness](https://hraness.com).
-
-Private routes can opt out completely with `excludedPaths`. Use `allowedPaths` to limit analytics to a public section. Both accept `{ match: "exact" | "prefix", path: string }` rules; prefixes match path segments, exclusions win, and an empty allowlist disables all routes. The client checks both the live and captured URL before sending, including after SPA navigation. Server helpers use the same route policy. `sensitivePaths` only removes attribution; it does not exclude events.
-
-### Private missing pages and purchase deduplication
-
-The missing-page reporter honors `unknownCanonicalPath`, so a site that collapses unknown URLs to `/private` keeps that policy in `requested_path` too. Excluded requested paths are not captured.
-
-`capturePostHogEvent(..., { uuid })` and `<PostHogEventReporter uuid={uuid} ... />` accept a valid, stable event UUID for verified conversions. Derive it server-side from an event-scoped secret and transaction identity; never send the raw order, session, or customer identifier. The pinned SDK emits this value as the top-level event `uuid`. PostHog can eventually deduplicate matching UUIDs; capture still sends retries, and immediate exactly-once delivery is not guaranteed. A `$insert_id` property alone is not this transport option.
-
-To count outbound links on a public site, register `"outbound link opened"` in `customEvents` and pass `captureOutboundLinks` to `<PostHogAnalytics>`. This opt-in observer records only the external HTTP(S) hostname and a bounded placement. Owned host aliases, non-web links, private routes, and declined consent are excluded. The default installs no outbound observer; link text, external paths, queries, and fragments are never sent.
