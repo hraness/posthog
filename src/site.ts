@@ -1,3 +1,5 @@
+import { redactSensitiveText } from "./redaction.js";
+
 export const POSTHOG_SCHEMA_VERSION = 2 as const;
 
 const MAX_PATH_LENGTH = 512;
@@ -155,17 +157,23 @@ export function classifyAnalyticsRoute(
   }
 
   const rule = site.routes.find((candidate) => ruleMatches(candidate, parsed.pathname));
-  const contentSlug = rule ? slugForRule(rule, parsed.pathname) : undefined;
+  // Eligibility and rule selection use the original location; emitted paths
+  // redact before length caps so a clipped identifier cannot evade matching.
+  const rawPathname = typeof location === "object" && !(location instanceof URL)
+    ? location.pathname
+    : (location instanceof URL ? location : new URL(location, `https://${site.canonicalDomain}`)).pathname;
+  const emittedPath = normalizeAnalyticsPathname(redactSensitiveText(rawPathname));
+  const contentSlug = rule ? slugForRule(rule, emittedPath) : undefined;
   return {
     analytics_schema_version: site.schemaVersion,
     site_id: site.id,
     canonical_domain: normalizeAnalyticsHostname(site.canonicalDomain),
-    canonical_path: rule === undefined && site.unknownCanonicalPath !== undefined
-      ? normalizeAnalyticsPathname(site.unknownCanonicalPath)
-      : parsed.pathname,
+    canonical_path: redactSensitiveText(rule === undefined && site.unknownCanonicalPath !== undefined
+      ? normalizeAnalyticsPathname(redactSensitiveText(site.unknownCanonicalPath))
+      : emittedPath),
     page_kind: rule?.pageKind ?? "other",
     ...(rule?.contentGroup ? { content_group: rule.contentGroup } : {}),
-    ...(contentSlug ? { content_slug: contentSlug } : {}),
+    ...(contentSlug ? { content_slug: redactSensitiveText(contentSlug) } : {}),
   };
 }
 
@@ -173,7 +181,7 @@ export function canonicalAnalyticsUrl(
   site: PostHogSiteDefinition,
   pathname: string,
 ): string {
-  return `https://${normalizeAnalyticsHostname(site.canonicalDomain)}${normalizeAnalyticsPathname(pathname)}`;
+  return `https://${normalizeAnalyticsHostname(site.canonicalDomain)}${normalizeAnalyticsPathname(redactSensitiveText(pathname))}`;
 }
 
 export function isAllowedCustomEvent(

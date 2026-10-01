@@ -1,6 +1,7 @@
 # Contents
 
 - `site.ts` normalizes hosts and paths, validates site-owned routes, and derives canonical route context.
+- `redaction.ts` removes text identifiers, including percent-encoded spans, before emitted value limits.
 - `event.ts` normalizes event properties, sanitizes provider payloads, redacts sensitive values, and bounds exception capture.
 - `traffic.ts` classifies direct, internal, search, AI, social, and referral traffic from referrers and optional attribution.
 - `consent.ts` owns the provider-free Accounts region policy and one browser consent state shared with the SDK.

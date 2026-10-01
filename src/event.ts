@@ -1,3 +1,6 @@
+import { redactSensitiveText } from "./redaction.js";
+export { redactSensitiveText } from "./redaction.js";
+
 import {
   canonicalAnalyticsUrl,
   classifyAnalyticsRoute,
@@ -159,7 +162,7 @@ function normalizePrimitive(value: unknown): AnalyticsPrimitive | undefined {
     return Number.isFinite(value) ? value : undefined;
   }
   if (typeof value === "string") {
-    return cleanPropertyString(value);
+    return cleanPropertyString(redactSensitiveText(value));
   }
   return undefined;
 }
@@ -397,17 +400,6 @@ export function sanitizeProviderProperties(
   return sanitized;
 }
 
-export function redactSensitiveText(value: string): string {
-  return value
-    .replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]")
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]")
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s?#]+)@/giu, "$1[credential]@")
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]")
-    .replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1")
-    .replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1")
-    .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=([^\s&]+)/giu, "$1=[redacted]");
-}
 
 export function sanitizeAnalyticsError(value: unknown): Error {
   try {
@@ -580,7 +572,7 @@ export function pageNotFoundProperties(
     return null;
   }
   const requestedPath = cleanPropertyString(
-    redactSensitiveText(normalizeAnalyticsPathname(pathname)),
+    normalizeAnalyticsPathname(redactSensitiveText(pathname)),
   );
   const referrerHost = input.referrer === "$direct" ? null : hostOf(input.referrer);
   return {
