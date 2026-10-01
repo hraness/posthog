@@ -39,8 +39,11 @@ function emailSpans(value) {
         break;
       start -= width;
     }
+    const candidateStart = start;
     while (start < at && /^[._%+-]$/u.test(value.charAt(start)))
       start += 1;
+    if (start === at)
+      start = candidateStart;
     previousAt = at;
     if (start === at)
       continue;
@@ -1267,4 +1270,4 @@ export {
   capturePostHogCtaClicked
 };
 
-//# debugId=21AAB4EA3B9DCA1F64756E2164756E21
+//# debugId=E820CD5E2B1657FF64756E2164756E21

@@ -43,8 +43,11 @@ function emailSpans(value) {
         break;
       start -= width;
     }
+    const candidateStart = start;
     while (start < at && /^[._%+-]$/u.test(value.charAt(start)))
       start += 1;
+    if (start === at)
+      start = candidateStart;
     previousAt = at;
     if (start === at)
       continue;
@@ -1132,4 +1135,4 @@ export {
   HARNESS_API_KEY
 };
 
-//# debugId=A4D0F167C743F7E464756E2164756E21
+//# debugId=D0B23A7FAAEBD80A64756E2164756E21
