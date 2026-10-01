@@ -1,6 +1,164 @@
 // src/server.ts
 import { PostHog } from "posthog-node";
 
+// src/redaction.ts
+var MAX_INSPECTION_LENGTH = 32768;
+var MAX_DECODE_PASSES = 8;
+function percentCharacter(value, index) {
+  const first = value.slice(index, index + 3);
+  if (!/^%[0-9a-f]{2}$/iu.test(first))
+    return null;
+  const byte = Number.parseInt(first.slice(1), 16);
+  const count = byte < 128 ? 1 : byte >= 194 && byte <= 223 ? 2 : byte >= 224 && byte <= 239 ? 3 : byte >= 240 && byte <= 244 ? 4 : 0;
+  if (!count)
+    return null;
+  const encoded = value.slice(index, index + count * 3);
+  if (!/^(?:%[0-9a-f]{2})+$/iu.test(encoded) || encoded.length !== count * 3)
+    return null;
+  try {
+    return { text: decodeURIComponent(encoded), length: encoded.length };
+  } catch {
+    return null;
+  }
+}
+function emailSpans(value) {
+  const result = [];
+  const domain = /@[\p{L}\p{N}\p{M}.-]+\.[\p{L}\p{M}]{2,}/uy;
+  let previousAt = -1;
+  let previousEnd = 0;
+  for (let at = value.indexOf("@");at >= 0; at = value.indexOf("@", at + 1)) {
+    let start = at;
+    const floor = Math.max(previousAt + 1, previousEnd);
+    while (start > floor) {
+      const unit = value.charCodeAt(start - 1);
+      const width = unit >= 56320 && unit <= 57343 && start - 2 >= floor ? 2 : 1;
+      if (!/^[\p{L}\p{N}\p{M}._%+-]+$/u.test(value.slice(start - width, start)))
+        break;
+      start -= width;
+    }
+    while (start < at && /^[._%+-]$/u.test(value.charAt(start)))
+      start += 1;
+    previousAt = at;
+    if (start === at)
+      continue;
+    domain.lastIndex = at;
+    const match = domain.exec(value);
+    if (!match)
+      continue;
+    const end = at + match[0].length;
+    result.push({ start, end });
+    previousEnd = end;
+  }
+  return result;
+}
+function userinfoSpans(value) {
+  const result = [];
+  for (let colon = value.indexOf("://");colon >= 0; colon = value.indexOf("://", colon + 3)) {
+    let scheme = colon;
+    while (scheme > 0 && /^[a-z0-9+.-]$/iu.test(value.charAt(scheme - 1)))
+      scheme -= 1;
+    while (scheme < colon && !/^[a-z]$/iu.test(value.charAt(scheme)))
+      scheme += 1;
+    if (scheme === colon)
+      continue;
+    const start = colon + 3;
+    let end = start;
+    let at = -1;
+    while (end < value.length && !/[/\s?#]/u.test(value.charAt(end))) {
+      if (value.charAt(end) === "@")
+        at = end;
+      end += 1;
+    }
+    if (at > start)
+      result.push({ start, end: at });
+  }
+  return result;
+}
+function redactEncodedIdentifiers(value) {
+  let shadow = value;
+  let spans = Array.from({ length: value.length }, (_, index) => ({ start: index, end: index + 1 }));
+  const spanAt = (index) => spans[index] ?? { start: 0, end: value.length };
+  for (let pass = 0;pass < MAX_DECODE_PASSES && shadow.includes("%"); pass += 1) {
+    let decoded = "";
+    const decodedSpans = [];
+    let changed = false;
+    for (let index = 0;index < shadow.length; index += 1) {
+      const escape = percentCharacter(shadow, index);
+      if (escape) {
+        decoded += escape.text;
+        const span = { start: spanAt(index).start, end: spanAt(index + escape.length - 1).end };
+        for (let unit = 0;unit < escape.text.length; unit += 1)
+          decodedSpans.push(span);
+        index += escape.length - 1;
+        changed = true;
+      } else {
+        decoded += shadow.charAt(index);
+        decodedSpans.push(spanAt(index));
+      }
+    }
+    shadow = decoded;
+    spans = decodedSpans;
+    if (!changed)
+      break;
+  }
+  const replacements = [];
+  const unresolvedSpans = Array.from(shadow.matchAll(/%[0-9a-f]{2}/giu)).filter((match) => percentCharacter(shadow, match.index) !== null).map((match) => spanAt(match.index));
+  let unresolvedIndex = 0;
+  for (const segment of value.matchAll(/[^\s/?#]+/gu)) {
+    const end = segment.index + segment[0].length;
+    while (unresolvedSpans[unresolvedIndex] && (unresolvedSpans[unresolvedIndex]?.start ?? Infinity) < segment.index)
+      unresolvedIndex += 1;
+    if (unresolvedSpans[unresolvedIndex] && (unresolvedSpans[unresolvedIndex]?.start ?? Infinity) < end) {
+      replacements.push({ start: segment.index, end, replacement: "[redacted]", priority: 0 });
+    }
+  }
+  const patterns = [
+    [/(\bBearer\s+)([A-Za-z0-9._~+/=-]+)\b/giu, "[credential]"],
+    [/(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=)([^\s&]+)/giu, "[redacted]"],
+    [/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]"],
+    [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]"]
+  ];
+  for (const [priority, [pattern, replacement]] of patterns.entries()) {
+    for (const match of shadow.matchAll(pattern)) {
+      const offset = match.index + (match[1]?.length ?? 0);
+      const length = (match[2] ?? match[0]).length;
+      const start = spanAt(offset).start;
+      const end = spanAt(offset + length - 1).end;
+      replacements.push({ start, end, replacement, priority: priority + 2 });
+    }
+  }
+  for (const { start, end } of userinfoSpans(shadow)) {
+    replacements.push({ start: spanAt(start).start, end: spanAt(end - 1).end, replacement: "[credential]", priority: 1 });
+  }
+  for (const { start, end } of emailSpans(shadow)) {
+    replacements.push({ start: spanAt(start).start, end: spanAt(end - 1).end, replacement: "[email]", priority: 6 });
+  }
+  replacements.sort((left, right) => left.start - right.start || left.priority - right.priority || right.end - left.end);
+  let result = "";
+  let cursor = 0;
+  for (const { start, end, replacement } of replacements) {
+    if (start < cursor)
+      continue;
+    result += value.slice(cursor, start) + replacement;
+    cursor = end;
+  }
+  return result + value.slice(cursor);
+}
+function removeRelativePathQueries(value) {
+  return value.replace(/[^\s)]+/gu, (token) => token.split("#").map((part) => {
+    const slash = part.indexOf("/");
+    if (slash < 0)
+      return part;
+    const query = part.indexOf("?", slash + 1);
+    return query > slash + 1 ? part.slice(0, query) : part;
+  }).join("#"));
+}
+function redactSensitiveText(value) {
+  if (value.length > MAX_INSPECTION_LENGTH)
+    return "[redacted]";
+  return removeRelativePathQueries(redactEncodedIdentifiers(value).replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=([^\s&]+)/giu, "$1=[redacted]"));
+}
+
 // src/site.ts
 var MAX_PATH_LENGTH = 512;
 var MAX_SLUG_LENGTH = 160;
@@ -75,19 +233,21 @@ function classifyAnalyticsRoute(site, location) {
     return null;
   }
   const rule = site.routes.find((candidate) => ruleMatches(candidate, parsed.pathname));
-  const contentSlug = rule ? slugForRule(rule, parsed.pathname) : undefined;
+  const rawPathname = typeof location === "object" && !(location instanceof URL) ? location.pathname : (location instanceof URL ? location : new URL(location, `https://${site.canonicalDomain}`)).pathname;
+  const emittedPath = normalizeAnalyticsPathname(redactSensitiveText(rawPathname));
+  const contentSlug = rule ? slugForRule(rule, emittedPath) : undefined;
   return {
     analytics_schema_version: site.schemaVersion,
     site_id: site.id,
     canonical_domain: normalizeAnalyticsHostname(site.canonicalDomain),
-    canonical_path: rule === undefined && site.unknownCanonicalPath !== undefined ? normalizeAnalyticsPathname(site.unknownCanonicalPath) : parsed.pathname,
+    canonical_path: redactSensitiveText(rule === undefined && site.unknownCanonicalPath !== undefined ? normalizeAnalyticsPathname(redactSensitiveText(site.unknownCanonicalPath)) : emittedPath),
     page_kind: rule?.pageKind ?? "other",
     ...rule?.contentGroup ? { content_group: rule.contentGroup } : {},
-    ...contentSlug ? { content_slug: contentSlug } : {}
+    ...contentSlug ? { content_slug: redactSensitiveText(contentSlug) } : {}
   };
 }
 function canonicalAnalyticsUrl(site, pathname) {
-  return `https://${normalizeAnalyticsHostname(site.canonicalDomain)}${normalizeAnalyticsPathname(pathname)}`;
+  return `https://${normalizeAnalyticsHostname(site.canonicalDomain)}${normalizeAnalyticsPathname(redactSensitiveText(pathname))}`;
 }
 function isAllowedCustomEvent(site, eventName) {
   return site.customEvents.includes(eventName);
@@ -213,7 +373,7 @@ function normalizePrimitive(value) {
     return Number.isFinite(value) ? value : undefined;
   }
   if (typeof value === "string") {
-    return cleanPropertyString(value);
+    return cleanPropertyString(redactSensitiveText(value));
   }
   return;
 }
@@ -393,9 +553,6 @@ function sanitizeProviderProperties(site, properties, currentUrl = properties["$
     }
   }
   return sanitized;
-}
-function redactSensitiveText(value) {
-  return value.replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s?#]+)@/giu, "$1[credential]@").replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/([/][^\s?#)]+)\?[^\s#)]*/gu, "$1").replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=([^\s&]+)/giu, "$1=[redacted]");
 }
 function sanitizeAnalyticsError(value) {
   try {
@@ -725,4 +882,4 @@ export {
   capturePostHogEvent
 };
 
-//# debugId=E1C1BA17DC76700A64756E2164756E21
+//# debugId=52867C89D9B3F8D764756E2164756E21

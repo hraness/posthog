@@ -26,7 +26,7 @@ tarball with framework versions inside the supported peer ranges:
 ```json
 {
   "dependencies": {
-    "@hraness/posthog": "https://github.com/hraness/posthog/releases/download/v0.3.9/hraness-posthog-0.3.9.tgz",
+    "@hraness/posthog": "https://github.com/hraness/posthog/releases/download/v0.3.10/hraness-posthog-0.3.10.tgz",
     "next": "16.2.12",
     "react": "19.2.3"
   }
@@ -275,7 +275,14 @@ observability failure does not change the request error path.
 ### Choose attribution and route privacy
 
 The default `attributionMode: "campaign"` keeps allowlisted campaign attribution on
-public routes. Set `attributionMode: "referrer_only"` to remove campaign queries and
+public routes. Emitted paths, slugs, property strings, and exception fields redact identifiers before
+length limits. Inspection recognizes percent-encoded email addresses (including Unicode)
+and credentials without decoding unrelated URL separators. It inspects at most eight
+encoding layers and 32,768 characters: unresolved encodings redact their original path
+segment, and oversized strings become `[redacted]`. Route eligibility still uses
+the original location; redaction does not make a private route eligible.
+
+Set `attributionMode: "referrer_only"` to remove campaign queries and
 properties on every route, including initial and session-entry values, and classify
 traffic only from the referrer.
 
