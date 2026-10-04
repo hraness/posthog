@@ -18,6 +18,17 @@ Your app still decides its hosts, routes, events, what counts as a conversion, t
 and when analytics may run. The package validates those inputs, strips or limits sensitive
 properties before they reach PostHog, and sends nothing from a capture call that fails validation.
 
+## Choose your analytics task
+
+Start with the [provider-neutral quick start](#quick-start) to check your routes without sending events. Then use the adapter for the code that runs your task:
+
+- [Browser capture](#connect-browser-capture): mount the React adapter and capture declared events.
+- [Server events](#send-server-events) and [server exceptions](#report-server-exceptions): report from trusted handlers.
+- [Route privacy and attribution](#choose-attribution-and-route-privacy): exclude private routes or remove campaign attribution.
+- [Shared consent](#does-the-package-define-conversions-or-consent-policy): understand when capture starts and how withdrawal stops it.
+- [Test your site](#test-your-site-against-real-posthogjs): inspect outgoing SDK requests before deployment.
+- [Source maps](#upload-source-maps-at-the-build-boundary): keep upload credentials at build time.
+
 ## Quick start
 
 This repository does not publish the package to npm. Pin its immutable GitHub Release
