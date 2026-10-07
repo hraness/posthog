@@ -1,6 +1,6 @@
 # Security
 
-Report vulnerabilities privately through the repository's GitHub security advisory page. Do not open a public issue for an undisclosed vulnerability.
+Report vulnerabilities privately through the repository's GitHub security advisory page. If GitHub reporting is unavailable, email [hraness@pm.me](mailto:hraness@pm.me). Do not open a public issue for an undisclosed vulnerability.
 
 Public `phc_` project tokens are analytics routing identifiers, not authorization credentials. Personal `phx_` API keys remain build-time secrets and must never reach a browser bundle, logged payload, fixture, or repository. Applications must make authorization and routing decisions from trusted server-side state rather than analytics properties.
 
