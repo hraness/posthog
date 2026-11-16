@@ -11,14 +11,15 @@ import {
   firstTouchProps,
   parseFirstTouch,
   refOf,
+  matchRoute,
   remember,
-  routePattern,
   withoutTracking,
   type Arrival,
   type FirstTouch,
 } from "./attribution.js";
 import {
   accountId,
+  adsAddress,
   capabilities,
   ENGLISH,
   formatChoices,
@@ -26,15 +27,17 @@ import {
   ID_MAX_AGE_SECONDS,
   linkChoice,
   mergeChoices,
+  onPrivatePath,
   parseChoices,
   posthogOptions,
+  regionAddress,
   sessionFor,
   visitId,
   type BrowserConfig,
   type ConsentWords,
 } from "./browser-config.js";
 import { MILESTONES, SCHEMA, type EventName, type Props, type PropsOf } from "./events.js";
-import { GROUP_COUNTRY, parseRegionResponse, regionPolicy, type Choices, type RegionPolicy } from "./policy.js";
+import { parseRegionResponse, regionPolicy, type Choices, type RegionPolicy } from "./policy.js";
 
 export * from "./browser-config.js";
 export {
@@ -52,7 +55,7 @@ export {
 } from "./attribution.js";
 
 type PostHogLike = {
-  init(token: string, options: Record<string, unknown>): unknown;
+  init(token: string, options: Record<string, unknown>, name?: string): unknown;
   capture(event: string, props?: Record<string, unknown>, options?: Record<string, unknown>): unknown;
   identify(id: string, set?: Record<string, unknown>, setOnce?: Record<string, unknown>): void;
   alias?(alias: string): void;
@@ -197,6 +200,10 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     } catch {
       // Blocked.
     }
+    adsOff();
+  }
+  /** Ads stop: Meta's own cookies go too, then the page's `onAdsOff`. */
+  function adsOff() {
     for (const name of ["_fbp", "_fbc"]) {
       for (const domain of ["", `; domain=${location.hostname}`, `; domain=.${location.hostname}`]) {
         try {
@@ -216,41 +223,111 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       return undefined;
     }
   };
-  const isPrivate = (path: string) => {
-    const patterns = config.privatePaths ?? [];
-    return patterns.length > 0 && routePattern(path, patterns) !== path;
-  };
+  const isPrivate = (path: string) => matchRoute(path, config.privatePaths ?? []) !== undefined;
 
-  async function region(): Promise<{ country: string | null }> {
+  /**
+   * The visitor's country, or null when the edge did not know it. Null lets this browser's own time zone decide (an
+   * unknown zone means the EU), never the group the server guessed without one.
+   */
+  async function region(): Promise<string | null> {
     const injected = parseRegionResponse((window as { __hranessRegion?: unknown }).__hranessRegion);
-    if (injected) return { country: injected.country ?? GROUP_COUNTRY[injected.region_group] };
-    if (config.regionUrl === false) return { country: null };
+    if (injected) return injected.country;
+    if (config.regionUrl === false) return null;
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => { controller.abort(); }, 1500);
-      const response = await fetch(config.regionUrl ?? "/api/region", { credentials: "omit", signal: controller.signal });
+      const response = await fetch(regionAddress(config.regionUrl ?? "/api/region", zone()), { credentials: "omit", signal: controller.signal });
       clearTimeout(timer);
-      const parsed = parseRegionResponse(response.ok ? await response.json() : undefined);
-      return { country: parsed === undefined ? null : parsed.country ?? GROUP_COUNTRY[parsed.region_group] };
+      return parseRegionResponse(response.ok ? await response.json() : undefined)?.country ?? null;
     } catch {
-      return { country: null };
+      return null;
     }
   }
 
-  const currentPolicy = (country: string | null) => regionPolicy({ country, zone: zone(), gpc: gpc(), choices: storedChoices() });
+  let country: string | null = null;
+  const currentPolicy = () => regionPolicy({ country, zone: zone(), gpc: gpc(), choices: storedChoices() });
 
   function startAds() {
     if (adsStarted || policy?.ads !== true) return;
     adsStarted = true;
-    config.onAds?.({ fbclid: arrival.fbclid, allowed: () => policy?.ads === true });
+    config.onAds?.({ fbclid: arrival.fbclid, href: adsAddress(location.href), allowed: () => policy?.ads === true });
+  }
+
+  let base: Record<string, unknown> = {};
+  let generation = 0;
+  let errors = 0;
+  const tidy = afterFirstPageview(() => {
+    const clean = withoutTracking(location.href);
+    if (clean !== null) history.replaceState(history.state, "", clean);
+  });
+
+  /** Starts the first-party identity: the visit ID cookie and the first-touch record. Persistent mode only. */
+  function persist(): ReturnType<typeof sessionFor> {
+    const now = Date.now();
+    let stored: Record<string, unknown> | undefined;
+    try {
+      stored = JSON.parse(readLocal(keys.touch) ?? "null") as Record<string, unknown> | undefined;
+    } catch {
+      stored = undefined;
+    }
+    const before = parseFirstTouch(stored?.touch);
+    const session = sessionFor(stored?.session, now);
+    distinct = visitId(stored?.id) ?? visitId(readCookie(keys.id)) ?? crypto.randomUUID();
+    identified = accountId(stored?.account);
+    touch = remember(before, new Date(now), arrival, {
+      surface: String(base.surface),
+      ...(config.landingKind?.(arrival.path) === undefined ? {} : { landingKind: config.landingKind(arrival.path) ?? "" }),
+      ...(config.channel === undefined ? {} : { channel: config.channel }),
+    });
+    writeCookie(keys.id, distinct);
+    saveRecord(session);
+    return session;
+  }
+
+  /** Loads PostHog under the current policy. `name` starts a second instance (after an EU yes) beside the first. */
+  async function boot(session: ReturnType<typeof sessionFor>, name?: string): Promise<PostHogLike | undefined> {
+    if (policy === undefined) return undefined;
+    const caps = capabilities(policy, config.preset, isPrivate(location.pathname));
+    const [{ default: posthog }] = await Promise.all([
+      import("posthog-js/dist/module.no-external.js"),
+      import("posthog-js/dist/exception-autocapture.js"),
+      caps.vitalsAttribution ? import("posthog-js/dist/web-vitals-with-attribution.js") : import("posthog-js/dist/web-vitals.js"),
+      caps.heatmaps ? import("posthog-js/dist/dead-clicks-autocapture.js") : Promise.resolve(),
+      caps.replay ? import("posthog-js/dist/posthog-recorder.js") : Promise.resolve(),
+    ]);
+    if (!on) return undefined;
+    const root = posthog as unknown as PostHogLike;
+    // Only the newest instance sends: one retired by an EU yes goes quiet at once.
+    const mine = ++generation;
+    const options = {
+      ...posthogOptions({ config, policy, caps, distinctId: identified ?? distinct, identified: identified !== undefined, sessionId: session?.id }),
+      before_send: (event: { event?: string; properties?: Record<string, unknown> } | null) => {
+        if (event === null || !on || mine !== generation) return null;
+        if (policy?.analytics === "persistent") touchSession(event.properties?.$session_id);
+        if (event.event === "$exception" && ++errors > 5) return null;
+        if (event.event !== undefined && ["$autocapture", "$rageclick", "$dead_click"].includes(event.event) && fromPrivateElement(event.properties)) return null;
+        const kept = isPrivate(location.pathname) ? onPrivatePath(event) : event;
+        if (kept === null) return null;
+        const own = config.clean?.allowProps === undefined ? kept.properties : cleanProps(kept.properties ?? {}, { allowProps: [...config.clean.allowProps, ...Object.keys(facts)] });
+        const cleaned = cleanProps({ ...kept, properties: { ...own, ...facts } }, { routes: [...(config.clean?.routes ?? []), ...(config.privatePaths ?? [])] });
+        queueMicrotask(() => { tidy(event.event); });
+        return cleaned;
+      },
+    };
+    if (name === undefined) {
+      root.init(config.token, options);
+      return root;
+    }
+    const made = root.init(config.token, options, name) as PostHogLike | undefined;
+    return made;
   }
 
   async function load() {
-    const { country } = await region();
-    policy = currentPolicy(country);
+    country = await region();
+    policy = currentPolicy();
     if (policy.analytics !== "persistent") forget();
-    const caps = capabilities(policy, config.preset, isPrivate(location.pathname));
-    const base: Record<string, unknown> = {
+    else if (!policy.ads) adsOff();
+    base = {
       site_id: config.siteId,
       surface: config.surface ?? (config.preset === "marketing" ? "site" : config.preset === "docs" ? "docs" : "web_app"),
       schema: SCHEMA,
@@ -260,25 +337,8 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     };
     let session: ReturnType<typeof sessionFor>;
     if (policy.analytics === "persistent") {
-      const now = Date.now();
-      let stored: Record<string, unknown> | undefined;
-      try {
-        stored = JSON.parse(readLocal(keys.touch) ?? "null") as Record<string, unknown> | undefined;
-      } catch {
-        stored = undefined;
-      }
-      const before = parseFirstTouch(stored?.touch);
-      session = sessionFor(stored?.session, now);
-      distinct = visitId(stored?.id) ?? visitId(readCookie(keys.id)) ?? crypto.randomUUID();
-      identified = accountId(stored?.account);
-      touch = remember(before, new Date(now), arrival, {
-        surface: String(base.surface),
-        ...(config.landingKind?.(arrival.path) === undefined ? {} : { landingKind: config.landingKind(arrival.path) ?? "" }),
-        ...(config.channel === undefined ? {} : { channel: config.channel }),
-      });
-      writeCookie(keys.id, distinct);
-      saveRecord(session);
-      Object.assign(base, firstTouchProps(touch));
+      session = persist();
+      if (touch !== undefined) Object.assign(base, firstTouchProps(touch));
     } else {
       // Nothing is kept: how this one visit arrived is all there is.
       const one = remember(undefined, new Date(), arrival, config.channel === undefined ? {} : { channel: config.channel });
@@ -287,44 +347,30 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       delete base.returning;
     }
     Object.assign(base, arrivalProps(arrival, config.channel ?? {}));
-
-    const [{ default: posthog }] = await Promise.all([
-      import("posthog-js/dist/module.no-external.js"),
-      import("posthog-js/dist/exception-autocapture.js"),
-      caps.vitalsAttribution ? import("posthog-js/dist/web-vitals-with-attribution.js") : import("posthog-js/dist/web-vitals.js"),
-      caps.heatmaps ? import("posthog-js/dist/dead-clicks-autocapture.js") : Promise.resolve(),
-      caps.replay ? import("posthog-js/dist/posthog-recorder.js") : Promise.resolve(),
-    ]);
-    if (!on) return;
-    const ph = posthog as unknown as PostHogLike;
     facts = { ...base, ...facts } as Props;
-    const tidy = afterFirstPageview(() => {
-      const clean = withoutTracking(location.href);
-      if (clean !== null) history.replaceState(history.state, "", clean);
-    });
-    let errors = 0;
-    ph.init(config.token, {
-      ...posthogOptions({ config, policy, caps, distinctId: identified ?? distinct, identified: identified !== undefined, sessionId: session?.id }),
-      before_send: (event: { event?: string; properties?: Record<string, unknown> } | null) => {
-        if (event === null || !on) return null;
-        if (policy?.analytics === "persistent") touchSession(event.properties?.$session_id);
-        if (event.event === "$exception" && ++errors > 5) return null;
-        if (event.event !== undefined && ["$autocapture", "$rageclick", "$dead_click"].includes(event.event)) {
-          if (fromPrivateElement(event.properties) || (config.preset !== "app" && isPrivate(location.pathname) && event.event !== "$autocapture")) return null;
-        }
-        const own = config.clean?.allowProps === undefined ? event.properties : cleanProps(event.properties ?? {}, { allowProps: [...config.clean.allowProps, ...Object.keys(facts)] });
-        const cleaned = cleanProps({ ...event, properties: { ...own, ...facts } }, { routes: [...(config.clean?.routes ?? []), ...(config.privatePaths ?? [])] });
-        queueMicrotask(() => { tidy(event.event); });
-        return cleaned;
-      },
-    });
+    const ph = await boot(session);
+    if (ph === undefined) return;
     client = ph;
     if (identified !== undefined) ph.identify(identified);
     for (const [event, props] of queue) send(event, props);
     queue = [];
-    watchNavigation(ph);
+    watchNavigation();
     startAds();
     if (policy.ask !== "none") setTimeout(() => { ask(policy?.ask ?? "none"); }, config.askDelayMs ?? 2500);
+  }
+
+  /** An EU yes: the cookieless client steps aside for a persistent one in this page, so identify works at once. */
+  async function upgrade() {
+    const old = client;
+    if (old === undefined || policy?.analytics !== "persistent") return;
+    const session = persist();
+    facts = { ...facts, ...(touch === undefined ? {} : firstTouchProps(touch)), consent_mode: policy.analytics };
+    const ph = await boot(session, "persistent");
+    if (ph === undefined) return;
+    old.stopSessionRecording();
+    old.set_config({ autocapture: false, capture_pageview: false, capture_pageleave: false, rageclick: false, capture_dead_clicks: false, capture_heatmaps: false });
+    client = ph;
+    if (identified !== undefined) ph.identify(identified);
   }
 
   function saveRecord(session: ReturnType<typeof sessionFor>) {
@@ -340,12 +386,13 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     saveRecord(sessionRecord);
   }
 
-  function watchNavigation(ph: PostHogLike) {
+  function watchNavigation() {
     let last = location.pathname;
+    // Events on a private path are trimmed in `before_send`; recording stops here.
     const check = () => {
       if (location.pathname === last) return;
       last = location.pathname;
-      if (isPrivate(last)) ph.stopSessionRecording();
+      if (isPrivate(last)) client?.stopSessionRecording();
     };
     window.addEventListener("popstate", check);
     for (const method of ["pushState", "replaceState"] as const) {
@@ -367,8 +414,14 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     const line = document.createElement("p");
     line.textContent = text;
     bar.append(line);
-    document.body.append(bar);
+    mount(bar);
     setTimeout(() => { bar.remove(); }, 6000);
+  }
+  /** Shows a bar once there is a body to hold it (a script in `<head>` may run first). */
+  function mount(bar: HTMLElement) {
+    const body = document.body as HTMLElement | null;
+    if (body !== null) body.append(bar);
+    else document.addEventListener("DOMContentLoaded", () => { document.body.append(bar); }, { once: true });
   }
   function banner() {
     document.querySelector(".hra-consent")?.remove();
@@ -401,7 +454,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       buttons.append(button);
     }
     bar.append(text, buttons);
-    document.body.append(bar);
+    mount(bar);
   }
 
   const api: Analytics<Extra> = {
@@ -445,19 +498,20 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       store(next);
       send("analytics choice made", { choice, scope });
       const was = policy;
-      policy = currentPolicy(was === undefined ? null : GROUP_COUNTRY[was.region_group]);
+      policy = currentPolicy();
       if (choice === "no") {
         client?.stopSessionRecording();
         if (scope === "all") forget();
-        else config.onAdsOff?.();
+        else adsOff();
       } else {
+        if (was !== undefined && was.analytics !== "persistent" && policy.analytics === "persistent") void upgrade().catch(() => undefined);
         startAds();
       }
     },
     privacyChoices() {
       store({ ...storedChoices(), ads: "no" });
       client?.stopSessionRecording();
-      config.onAdsOff?.();
+      adsOff();
       if (policy) policy = { ...policy, ads: false, replay: false };
       say(words.adsOff);
     },

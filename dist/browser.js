@@ -295,7 +295,7 @@ function arrivalProps(arrival, options = {}) {
     props[name] = value;
   return props;
 }
-function routePattern(path, patterns) {
+function matchRoute(path, patterns) {
   const segments = path.split("/").filter(Boolean);
   for (const pattern of patterns) {
     const parts = pattern.split("/").filter(Boolean);
@@ -309,7 +309,7 @@ function routePattern(path, patterns) {
         matched = false;
         break;
       }
-      if (part.startsWith(":") || part.includes(":")) {
+      if (part.includes(":")) {
         const [prefix = ""] = part.split(":", 1);
         if (!segment.startsWith(prefix)) {
           matched = false;
@@ -325,7 +325,10 @@ function routePattern(path, patterns) {
     if (matched && parts.length === segments.length)
       return pattern;
   }
-  return path;
+  return;
+}
+function routePattern(path, patterns) {
+  return matchRoute(path, patterns) ?? path;
 }
 function cleanUrl(value, routes = []) {
   const cut = value.indexOf("#");
@@ -525,6 +528,42 @@ function linkChoice(search) {
 function fromPrivateElement(properties) {
   const chain = properties?.$elements_chain;
   return typeof chain === "string" && /data-private|ph-no-capture/u.test(chain);
+}
+function regionAddress(base, zone) {
+  if (zone === undefined || !/^[A-Za-z0-9_+/-]{1,64}$/u.test(zone))
+    return base;
+  return `${base}${base.includes("?") ? "&" : "?"}tz=${encodeURIComponent(zone)}`;
+}
+function adsAddress(href) {
+  let url;
+  try {
+    url = new URL(href);
+  } catch {
+    return href;
+  }
+  url.hash = "";
+  for (const name of [...url.searchParams.keys()]) {
+    if (name !== "fbclid" && !name.startsWith("utm_"))
+      url.searchParams.delete(name);
+  }
+  return url.toString();
+}
+var ALLOWLISTED_ELEMENT = /(?:^|;)(?:a|button)(?=[.:;]|$)|attr__data-ph=/u;
+function onPrivatePath(event) {
+  const name = event.event;
+  if (name === "$$heatmap" || name === "$rageclick" || name === "$dead_click")
+    return null;
+  const properties = { ...event.properties ?? {} };
+  if (name === "$autocapture") {
+    const chain = properties.$elements_chain;
+    if (typeof chain !== "string" || !ALLOWLISTED_ELEMENT.test(chain))
+      return null;
+    properties.$elements_chain = chain.replace(/text="(?:[^"\\]|\\.)*"/gu, "");
+    delete properties.$el_text;
+    delete properties.$elements;
+  }
+  delete properties.$title;
+  return { ...event, properties };
 }
 
 // src/events.ts
@@ -829,6 +868,9 @@ function createAnalytics(config) {
     try {
       sessionStorage.removeItem(keys.touch);
     } catch {}
+    adsOff();
+  }
+  function adsOff() {
     for (const name of ["_fbp", "_fbc"]) {
       for (const domain of ["", `; domain=${location.hostname}`, `; domain=.${location.hostname}`]) {
         try {
@@ -846,78 +888,66 @@ function createAnalytics(config) {
       return;
     }
   };
-  const isPrivate = (path) => {
-    const patterns = config.privatePaths ?? [];
-    return patterns.length > 0 && routePattern(path, patterns) !== path;
-  };
+  const isPrivate = (path) => matchRoute(path, config.privatePaths ?? []) !== undefined;
   async function region() {
     const injected = parseRegionResponse(window.__hranessRegion);
     if (injected)
-      return { country: injected.country ?? GROUP_COUNTRY[injected.region_group] };
+      return injected.country;
     if (config.regionUrl === false)
-      return { country: null };
+      return null;
     try {
       const controller = new AbortController;
       const timer = setTimeout(() => {
         controller.abort();
       }, 1500);
-      const response = await fetch(config.regionUrl ?? "/api/region", { credentials: "omit", signal: controller.signal });
+      const response = await fetch(regionAddress(config.regionUrl ?? "/api/region", zone()), { credentials: "omit", signal: controller.signal });
       clearTimeout(timer);
-      const parsed = parseRegionResponse(response.ok ? await response.json() : undefined);
-      return { country: parsed === undefined ? null : parsed.country ?? GROUP_COUNTRY[parsed.region_group] };
+      return parseRegionResponse(response.ok ? await response.json() : undefined)?.country ?? null;
     } catch {
-      return { country: null };
+      return null;
     }
   }
-  const currentPolicy = (country) => regionPolicy({ country, zone: zone(), gpc: gpc(), choices: storedChoices() });
+  let country = null;
+  const currentPolicy = () => regionPolicy({ country, zone: zone(), gpc: gpc(), choices: storedChoices() });
   function startAds() {
     if (adsStarted || policy?.ads !== true)
       return;
     adsStarted = true;
-    config.onAds?.({ fbclid: arrival.fbclid, allowed: () => policy?.ads === true });
+    config.onAds?.({ fbclid: arrival.fbclid, href: adsAddress(location.href), allowed: () => policy?.ads === true });
   }
-  async function load() {
-    const { country } = await region();
-    policy = currentPolicy(country);
-    if (policy.analytics !== "persistent")
-      forget();
-    const caps = capabilities(policy, config.preset, isPrivate(location.pathname));
-    const base = {
-      site_id: config.siteId,
-      surface: config.surface ?? (config.preset === "marketing" ? "site" : config.preset === "docs" ? "docs" : "web_app"),
-      schema: SCHEMA,
-      page_kind: config.pageKind,
-      consent_mode: policy.analytics,
-      region_group: policy.region_group
-    };
-    let session;
-    if (policy.analytics === "persistent") {
-      const now = Date.now();
-      let stored;
-      try {
-        stored = JSON.parse(readLocal(keys.touch) ?? "null");
-      } catch {
-        stored = undefined;
-      }
-      const before = parseFirstTouch(stored?.touch);
-      session = sessionFor(stored?.session, now);
-      distinct = visitId(stored?.id) ?? visitId(readCookie(keys.id)) ?? crypto.randomUUID();
-      identified = accountId(stored?.account);
-      touch = remember(before, new Date(now), arrival, {
-        surface: String(base.surface),
-        ...config.landingKind?.(arrival.path) === undefined ? {} : { landingKind: config.landingKind(arrival.path) ?? "" },
-        ...config.channel === undefined ? {} : { channel: config.channel }
-      });
-      writeCookie(keys.id, distinct);
-      saveRecord(session);
-      Object.assign(base, firstTouchProps(touch));
-    } else {
-      const one = remember(undefined, new Date, arrival, config.channel === undefined ? {} : { channel: config.channel });
-      Object.assign(base, firstTouchProps(one));
-      delete base.active_days;
-      delete base.returning;
+  let base = {};
+  let generation = 0;
+  let errors = 0;
+  const tidy = afterFirstPageview(() => {
+    const clean = withoutTracking(location.href);
+    if (clean !== null)
+      history.replaceState(history.state, "", clean);
+  });
+  function persist() {
+    const now = Date.now();
+    let stored;
+    try {
+      stored = JSON.parse(readLocal(keys.touch) ?? "null");
+    } catch {
+      stored = undefined;
     }
-    Object.assign(base, arrivalProps(arrival, config.channel ?? {}));
+    const before = parseFirstTouch(stored?.touch);
+    const session = sessionFor(stored?.session, now);
+    distinct = visitId(stored?.id) ?? visitId(readCookie(keys.id)) ?? crypto.randomUUID();
+    identified = accountId(stored?.account);
+    touch = remember(before, new Date(now), arrival, {
+      surface: String(base.surface),
+      ...config.landingKind?.(arrival.path) === undefined ? {} : { landingKind: config.landingKind(arrival.path) ?? "" },
+      ...config.channel === undefined ? {} : { channel: config.channel }
+    });
+    writeCookie(keys.id, distinct);
+    saveRecord(session);
+    return session;
+  }
+  async function boot(session, name) {
+    if (policy === undefined)
+      return;
+    const caps = capabilities(policy, config.preset, isPrivate(location.pathname));
     const [{ default: posthog }] = await Promise.all([
       import("posthog-js/dist/module.no-external.js"),
       import("posthog-js/dist/exception-autocapture.js"),
@@ -927,47 +957,95 @@ function createAnalytics(config) {
     ]);
     if (!on)
       return;
-    const ph = posthog;
-    facts = { ...base, ...facts };
-    const tidy = afterFirstPageview(() => {
-      const clean = withoutTracking(location.href);
-      if (clean !== null)
-        history.replaceState(history.state, "", clean);
-    });
-    let errors = 0;
-    ph.init(config.token, {
+    const root = posthog;
+    const mine = ++generation;
+    const options = {
       ...posthogOptions({ config, policy, caps, distinctId: identified ?? distinct, identified: identified !== undefined, sessionId: session?.id }),
       before_send: (event) => {
-        if (event === null || !on)
+        if (event === null || !on || mine !== generation)
           return null;
         if (policy?.analytics === "persistent")
           touchSession(event.properties?.$session_id);
         if (event.event === "$exception" && ++errors > 5)
           return null;
-        if (event.event !== undefined && ["$autocapture", "$rageclick", "$dead_click"].includes(event.event)) {
-          if (fromPrivateElement(event.properties) || config.preset !== "app" && isPrivate(location.pathname) && event.event !== "$autocapture")
-            return null;
-        }
-        const own = config.clean?.allowProps === undefined ? event.properties : cleanProps(event.properties ?? {}, { allowProps: [...config.clean.allowProps, ...Object.keys(facts)] });
-        const cleaned = cleanProps({ ...event, properties: { ...own, ...facts } }, { routes: [...config.clean?.routes ?? [], ...config.privatePaths ?? []] });
+        if (event.event !== undefined && ["$autocapture", "$rageclick", "$dead_click"].includes(event.event) && fromPrivateElement(event.properties))
+          return null;
+        const kept = isPrivate(location.pathname) ? onPrivatePath(event) : event;
+        if (kept === null)
+          return null;
+        const own = config.clean?.allowProps === undefined ? kept.properties : cleanProps(kept.properties ?? {}, { allowProps: [...config.clean.allowProps, ...Object.keys(facts)] });
+        const cleaned = cleanProps({ ...kept, properties: { ...own, ...facts } }, { routes: [...config.clean?.routes ?? [], ...config.privatePaths ?? []] });
         queueMicrotask(() => {
           tidy(event.event);
         });
         return cleaned;
       }
-    });
+    };
+    if (name === undefined) {
+      root.init(config.token, options);
+      return root;
+    }
+    const made = root.init(config.token, options, name);
+    return made;
+  }
+  async function load() {
+    country = await region();
+    policy = currentPolicy();
+    if (policy.analytics !== "persistent")
+      forget();
+    else if (!policy.ads)
+      adsOff();
+    base = {
+      site_id: config.siteId,
+      surface: config.surface ?? (config.preset === "marketing" ? "site" : config.preset === "docs" ? "docs" : "web_app"),
+      schema: SCHEMA,
+      page_kind: config.pageKind,
+      consent_mode: policy.analytics,
+      region_group: policy.region_group
+    };
+    let session;
+    if (policy.analytics === "persistent") {
+      session = persist();
+      if (touch !== undefined)
+        Object.assign(base, firstTouchProps(touch));
+    } else {
+      const one = remember(undefined, new Date, arrival, config.channel === undefined ? {} : { channel: config.channel });
+      Object.assign(base, firstTouchProps(one));
+      delete base.active_days;
+      delete base.returning;
+    }
+    Object.assign(base, arrivalProps(arrival, config.channel ?? {}));
+    facts = { ...base, ...facts };
+    const ph = await boot(session);
+    if (ph === undefined)
+      return;
     client = ph;
     if (identified !== undefined)
       ph.identify(identified);
     for (const [event, props] of queue)
       send(event, props);
     queue = [];
-    watchNavigation(ph);
+    watchNavigation();
     startAds();
     if (policy.ask !== "none")
       setTimeout(() => {
         ask(policy?.ask ?? "none");
       }, config.askDelayMs ?? 2500);
+  }
+  async function upgrade() {
+    const old = client;
+    if (old === undefined || policy?.analytics !== "persistent")
+      return;
+    const session = persist();
+    facts = { ...facts, ...touch === undefined ? {} : firstTouchProps(touch), consent_mode: policy.analytics };
+    const ph = await boot(session, "persistent");
+    if (ph === undefined)
+      return;
+    old.stopSessionRecording();
+    old.set_config({ autocapture: false, capture_pageview: false, capture_pageleave: false, rageclick: false, capture_dead_clicks: false, capture_heatmaps: false });
+    client = ph;
+    if (identified !== undefined)
+      ph.identify(identified);
   }
   function saveRecord(session) {
     if (distinct === undefined || touch === undefined)
@@ -983,14 +1061,14 @@ function createAnalytics(config) {
     sessionRecord = sessionRecord?.id === current ? { ...sessionRecord, last: now } : { id: current, started: now, last: now };
     saveRecord(sessionRecord);
   }
-  function watchNavigation(ph) {
+  function watchNavigation() {
     let last = location.pathname;
     const check = () => {
       if (location.pathname === last)
         return;
       last = location.pathname;
       if (isPrivate(last))
-        ph.stopSessionRecording();
+        client?.stopSessionRecording();
     };
     window.addEventListener("popstate", check);
     for (const method of ["pushState", "replaceState"]) {
@@ -1011,10 +1089,19 @@ function createAnalytics(config) {
     const line = document.createElement("p");
     line.textContent = text;
     bar.append(line);
-    document.body.append(bar);
+    mount(bar);
     setTimeout(() => {
       bar.remove();
     }, 6000);
+  }
+  function mount(bar) {
+    const body = document.body;
+    if (body !== null)
+      body.append(bar);
+    else
+      document.addEventListener("DOMContentLoaded", () => {
+        document.body.append(bar);
+      }, { once: true });
   }
   function banner() {
     document.querySelector(".hra-consent")?.remove();
@@ -1047,7 +1134,7 @@ function createAnalytics(config) {
       buttons.append(button);
     }
     bar.append(text, buttons);
-    document.body.append(bar);
+    mount(bar);
   }
   const api = {
     track(event, props) {
@@ -1097,21 +1184,25 @@ function createAnalytics(config) {
       store(next);
       send("analytics choice made", { choice, scope });
       const was = policy;
-      policy = currentPolicy(was === undefined ? null : GROUP_COUNTRY[was.region_group]);
+      policy = currentPolicy();
       if (choice === "no") {
         client?.stopSessionRecording();
         if (scope === "all")
           forget();
         else
-          config.onAdsOff?.();
+          adsOff();
       } else {
+        if (was !== undefined && was.analytics !== "persistent" && policy.analytics === "persistent")
+          upgrade().catch(() => {
+            return;
+          });
         startAds();
       }
     },
     privacyChoices() {
       store({ ...storedChoices(), ads: "no" });
       client?.stopSessionRecording();
-      config.onAdsOff?.();
+      adsOff();
       if (policy)
         policy = { ...policy, ads: false, replay: false };
       say(words.adsOff);
@@ -1149,10 +1240,12 @@ export {
   withoutTracking,
   visitId,
   sessionFor,
+  regionAddress,
   refOf,
   refLabel,
   posthogOptions,
   parseChoices,
+  onPrivatePath,
   mergeChoices,
   linkChoice,
   fromPrivateElement,
@@ -1166,10 +1259,11 @@ export {
   capabilities,
   arrivalOf,
   afterFirstPageview,
+  adsAddress,
   accountId,
   ID_MAX_AGE_SECONDS,
   ENGLISH,
   DEFAULT_PRIVATE_SELECTOR
 };
 
-//# debugId=FEE4664B6C24EB8A64756E2164756E21
+//# debugId=C25E10D9B5BDA67164756E2164756E21

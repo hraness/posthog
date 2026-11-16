@@ -124,3 +124,30 @@ test("replay sampling is clamped and only set when asked", () => {
   expect(recording(7).sampleRate).toBe(1);
   expect(recording(Number.NaN)).not.toHaveProperty("sampleRate");
 });
+
+describe("region address, ads address and private paths", () => {
+  test("the region fetch carries a valid zone only", async () => {
+    const { regionAddress } = await import("./browser-config.js");
+    expect(regionAddress("/api/region", "Europe/Berlin")).toBe("/api/region?tz=Europe%2FBerlin");
+    expect(regionAddress("/api/region?x=1", "Asia/Tokyo")).toBe("/api/region?x=1&tz=Asia%2FTokyo");
+    expect(regionAddress("/api/region", undefined)).toBe("/api/region");
+    expect(regionAddress("/api/region", "bad zone<")).toBe("/api/region");
+  });
+
+  test("Meta's address keeps only click IDs and UTM labels", async () => {
+    const { adsAddress } = await import("./browser-config.js");
+    expect(adsAddress("https://example.com/p?ref=hn&via=x&story=2&utm_campaign=c&fbclid=f#h")).toBe("https://example.com/p?utm_campaign=c&fbclid=f");
+    expect(adsAddress("https://example.com/")).toBe("https://example.com/");
+  });
+
+  test("a private path drops heatmaps and unlisted clicks and cuts titles and text", async () => {
+    const { onPrivatePath } = await import("./browser-config.js");
+    for (const event of ["$$heatmap", "$rageclick", "$dead_click"]) expect(onPrivatePath({ event, properties: {} })).toBeNull();
+    expect(onPrivatePath({ event: "$autocapture", properties: { $elements_chain: "div.card;body" } })).toBeNull();
+    expect(onPrivatePath({ event: "$autocapture", properties: {} })).toBeNull();
+    const kept = onPrivatePath({ event: "$autocapture", properties: { $elements_chain: 'span:text="Jane";a.nav:attr__href="/x"', $el_text: "Jane", $title: "Jane's account" } });
+    expect(kept?.properties).toEqual({ $elements_chain: 'span:;a.nav:attr__href="/x"' });
+    expect(onPrivatePath({ event: "$autocapture", properties: { $elements_chain: 'div:attr__data-ph="save"' } })).not.toBeNull();
+    expect(onPrivatePath({ event: "$pageview", properties: { $title: "Secret", $current_url: "/account" } })?.properties).toEqual({ $current_url: "/account" });
+  });
+});

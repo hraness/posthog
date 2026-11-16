@@ -38,6 +38,15 @@ describe("the region endpoint", () => {
     expect(regionOf(new Headers()).region_group).toBe("eu");
   });
 
+  test("an unknown country leaves the country null, so the browser's zone can decide", () => {
+    for (const code of ["XX", "T1", ""]) {
+      const region = regionOf(new Headers(code === "" ? {} : { "cf-ipcountry": code }));
+      expect(region.country).toBeNull();
+      // Without a zone either, the last resort is the EU.
+      expect(region.region_group).toBe("eu");
+    }
+  });
+
   test("is never cached and takes the browser's time zone", async () => {
     const response = regionHandler(new Request("https://example.com/api/region?tz=Asia/Tokyo"));
     expect(response.headers.get("cache-control")).toBe("private, no-store");
@@ -134,6 +143,31 @@ describe("billing", () => {
     expect(calls[0]?.body.properties).toMatchObject({ $process_person_profile: true, store: "stripe" });
   });
 
+  test("billing never rejects unobserved: no token, a short secret or a throwing resolver", async () => {
+    const unhandled: unknown[] = [];
+    const listen = (reason: unknown) => { unhandled.push(reason); };
+    const events = process as unknown as { on(name: string, listener: (reason: unknown) => void): void; off(name: string, listener: (reason: unknown) => void): void };
+    events.on("unhandledRejection", listen);
+    try {
+      const { calls, fetcher } = recorder();
+      const event = stripe("checkout.session.completed", { mode: "subscription", payment_status: "paid", subscription: "sub_1" });
+      const throwing = { resolve: () => Promise.reject(new Error("store down")) } as unknown as Parameters<typeof captureBilling>[2];
+      let resolved = 0;
+      const counting = { resolve: () => { resolved += 1; return Promise.resolve("account-1"); } } as unknown as Parameters<typeof captureBilling>[2];
+      await captureBilling({ ...config, token: "", secret: "short", fetch: fetcher }, event, counting);
+      await captureBilling({ ...config, token: undefined, secret: "short", fetch: fetcher }, event, throwing);
+      await captureBilling({ ...config, secret: "short", fetch: fetcher }, event, owned({ "subscription:sub_1": "account-1" }));
+      await captureBilling({ ...config, secret: "0123456789abcdef0123", fetch: fetcher }, event, throwing);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      // No token: nothing is even built.
+      expect(resolved).toBe(0);
+      expect(calls).toHaveLength(0);
+      expect(unhandled).toEqual([]);
+    } finally {
+      events.off("unhandledRejection", listen);
+    }
+  });
+
   test("checkout metadata carries only labels", () => {
     expect(checkoutMetadata({ firstRef: "HN", firstSource: "google.com", plan: "pro", platform: "mac", interval: "year" })).toEqual({ "metadata[first_ref]": "hn", "metadata[first_source]": "google.com", "metadata[plan]": "pro", "metadata[platform]": "mac", "metadata[interval]": "year" });
     expect(checkoutMetadata({ firstRef: "person@example.com", firstSource: "a b", plan: "Pro Plan", platform: "amiga" })).toEqual({});
@@ -212,6 +246,39 @@ describe("the app and CLI wire format", () => {
     expect((await wireHandler({ ...config, fetch: fetcher }, post({ ...fresh, extra: 1 }))).status).toBe(400);
     expect((await wireHandler({ ...config, fetch: fetcher }, new Request("https://example.com/", { method: "POST", body: "{" }))).status).toBe(400);
     expect((await wireHandler({ ...config, fetch: fetcher }, new Request("https://example.com/"))).status).toBe(405);
+  });
+
+  test("a bad event is dropped from a batch, and an unknown MCP client is left out", async () => {
+    const { calls, fetcher } = recorder();
+    const post = (body: unknown) => new Request("https://example.com/api/cli/event", { method: "POST", body: JSON.stringify(body) });
+    const fresh = { ...valid, at: Math.floor(Date.now() / 1000) };
+    const tool = { ...fresh, event: "mcp tool called", props: { tool: "search", client: "a-new-editor", ok: "true", surface: "mcp" } };
+    expect(parseWireEvent(tool)?.props).toEqual({ tool: "search", ok: "true", surface: "mcp" });
+    expect(parseWireEvent({ ...tool, props: { ...tool.props, client: "cursor" } })?.props.client).toBe("cursor");
+    const jobs: Promise<unknown>[] = [];
+    expect((await wireHandler({ ...config, fetch: fetcher }, post([fresh, { ...fresh, extra: 1 }, tool]), {}, (job) => { jobs.push(job); })).status).toBe(204);
+    await Promise.all(jobs);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.body.properties).not.toHaveProperty("client");
+  });
+
+  test("the body is capped even without a content-length", async () => {
+    const big = JSON.stringify({ pad: "x".repeat(40_000) });
+    const chunks = [big.slice(0, 10_000), big.slice(10_000, 20_000), big.slice(20_000)];
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const next = chunks[pulled];
+        pulled += 1;
+        if (next === undefined) controller.close();
+        else controller.enqueue(new TextEncoder().encode(next));
+      },
+    });
+    const request = new Request("https://example.com/api/cli/event", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+    expect(request.headers.get("content-length")).toBeNull();
+    expect((await wireHandler(config, request)).status).toBe(413);
+    // Reading stopped at the limit, not at the end of the body.
+    expect(pulled).toBeLessThan(4);
   });
 });
 

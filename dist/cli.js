@@ -278,7 +278,6 @@ function createTelemetry(config) {
     async flush() {
       if (queue.length === 0)
         return;
-      const batch = queue.splice(0, 20);
       const current = await state().catch(() => {
         return;
       });
@@ -286,18 +285,28 @@ function createTelemetry(config) {
         queue = [];
         return;
       }
-      const body = JSON.stringify(batch.map((event) => ({ ...event, install: current.installId })));
       const controller = new AbortController;
       const timer = setTimeout(() => {
         controller.abort();
       }, config.timeoutMs ?? 1000);
+      const expired = new Promise((resolve) => {
+        controller.signal.addEventListener("abort", () => {
+          resolve();
+        }, { once: true });
+      });
       try {
-        await (config.fetch ?? fetch)(config.endpoint, { method: "POST", headers: { "content-type": "application/json" }, body, signal: controller.signal });
-      } catch {} finally {
+        while (queue.length > 0 && !controller.signal.aborted) {
+          const batch = queue.splice(0, 20);
+          const body = JSON.stringify(batch.map((event) => ({ ...event, install: current.installId })));
+          const sent = Promise.resolve().then(() => (config.fetch ?? fetch)(config.endpoint, { method: "POST", headers: { "content-type": "application/json" }, body, signal: controller.signal })).catch(() => {
+            return;
+          });
+          await Promise.race([sent, expired]);
+        }
+      } finally {
         clearTimeout(timer);
+        queue = [];
       }
-      if (queue.length > 0)
-        await api.flush();
     }
   };
   return api;
@@ -309,4 +318,4 @@ export {
   createTelemetry
 };
 
-//# debugId=8AC9C0311B2BAF1C64756E2164756E21
+//# debugId=960C0FDF5871FC2264756E2164756E21

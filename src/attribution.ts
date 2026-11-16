@@ -356,8 +356,8 @@ export function arrivalProps(arrival: Arrival, options: ChannelOptions = {}): Fi
 /** A route pattern such as `/@:handle/:slug` or `/library/*`. `:name` matches one segment, `*` the rest. */
 export type RoutePattern = string;
 
-/** The pattern a path matches, or the path itself when none does. */
-export function routePattern(path: string, patterns: readonly RoutePattern[]): string {
+/** The first pattern a path matches, or undefined when none does. A literal pattern (`/account`) matches itself. */
+export function matchRoute(path: string, patterns: readonly RoutePattern[]): RoutePattern | undefined {
   const segments = path.split("/").filter(Boolean);
   for (const pattern of patterns) {
     const parts = pattern.split("/").filter(Boolean);
@@ -367,7 +367,7 @@ export function routePattern(path: string, patterns: readonly RoutePattern[]): s
       if (part === "*") return pattern;
       const segment = segments[index];
       if (segment === undefined) { matched = false; break; }
-      if (part.startsWith(":") || part.includes(":")) {
+      if (part.includes(":")) {
         const [prefix = ""] = part.split(":", 1);
         if (!segment.startsWith(prefix)) { matched = false; break; }
         continue;
@@ -376,7 +376,12 @@ export function routePattern(path: string, patterns: readonly RoutePattern[]): s
     }
     if (matched && parts.length === segments.length) return pattern;
   }
-  return path;
+  return undefined;
+}
+
+/** The pattern a path matches, or the path itself when none does. */
+export function routePattern(path: string, patterns: readonly RoutePattern[]): string {
+  return matchRoute(path, patterns) ?? path;
 }
 
 export type CleanOptions = Readonly<{

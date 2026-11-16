@@ -214,23 +214,30 @@ export function createTelemetry(config: TelemetryConfig): Telemetry {
     },
     async flush() {
       if (queue.length === 0) return;
-      const batch = queue.splice(0, 20);
       const current = await state().catch(() => undefined);
       if (current?.enabled !== true || current.installId === undefined) {
         queue = [];
         return;
       }
-      const body = JSON.stringify(batch.map((event) => ({ ...event, install: current.installId })));
+      // One deadline for the whole flush, however many batches: a command never waits more than about a second.
       const controller = new AbortController();
       const timer = setTimeout(() => { controller.abort(); }, config.timeoutMs ?? 1000);
+      // A fetch that ignores its signal still loses the race.
+      const expired = new Promise<void>((resolve) => { controller.signal.addEventListener("abort", () => { resolve(); }, { once: true }); });
       try {
-        await (config.fetch ?? fetch)(config.endpoint, { method: "POST", headers: { "content-type": "application/json" }, body, signal: controller.signal });
-      } catch {
-        // Offline or slow: the counts are dropped, never retried into a later command's time.
+        while (queue.length > 0 && !controller.signal.aborted) {
+          const batch = queue.splice(0, 20);
+          const body = JSON.stringify(batch.map((event) => ({ ...event, install: current.installId })));
+          const sent = Promise.resolve()
+            .then(() => (config.fetch ?? fetch)(config.endpoint, { method: "POST", headers: { "content-type": "application/json" }, body, signal: controller.signal }))
+            // Offline or slow: the counts are dropped, never retried into a later command's time.
+            .catch(() => undefined);
+          await Promise.race([sent, expired]);
+        }
       } finally {
         clearTimeout(timer);
+        queue = [];
       }
-      if (queue.length > 0) await api.flush();
     },
   };
   return api;

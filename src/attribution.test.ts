@@ -259,3 +259,16 @@ describe("what never leaves", () => {
     expect(cleanProps({ $current_url: "/", plan: "pro", prompt: "secret" }, { allowProps: ["plan"] }) as unknown).toEqual({ $current_url: "/", plan: "pro" });
   });
 });
+
+describe("route matching", () => {
+  test("a literal pattern matches itself; no match is undefined", async () => {
+    const { matchRoute, routePattern } = await import("./attribution.js");
+    const patterns = ["/account", "/settings/billing", "/library/*", "/s/:id"];
+    expect(matchRoute("/account", patterns)).toBe("/account");
+    expect(matchRoute("/settings/billing", patterns)).toBe("/settings/billing");
+    expect(matchRoute("/library/a/b", patterns)).toBe("/library/*");
+    expect(matchRoute("/s/abc", patterns)).toBe("/s/:id");
+    for (const path of ["/accounts", "/settings", "/s/abc/def", "/"]) expect(matchRoute(path, patterns)).toBeUndefined();
+    expect(routePattern("/accounts", patterns)).toBe("/accounts");
+  });
+});

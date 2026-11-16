@@ -186,11 +186,14 @@ export function startPixel(config: PixelConfig, page: Page, fbclid: string | und
   return pixel;
 }
 
-/** The page itself, for `startPixel`. */
-export const browserPage = (): Page => ({
+/**
+ * The page itself, for `startPixel`. `href` overrides the address Meta sees: pass the cleaned address the browser
+ * client hands to `onAds`, so a tagged landing still sends its PageView.
+ */
+export const browserPage = (href?: string): Page => ({
   document,
   window: window as unknown as Page["window"],
-  location,
+  location: href === undefined ? location : { href, hostname: location.hostname },
   now: () => Date.now(),
   random: Math.random,
   storage: () => localStorage,

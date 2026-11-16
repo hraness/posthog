@@ -157,10 +157,10 @@ function startPixel(config, page, fbclid, allowed) {
     pixel.track("PageView");
   return pixel;
 }
-var browserPage = () => ({
+var browserPage = (href) => ({
   document,
   window,
-  location,
+  location: href === undefined ? location : { href, hostname: location.hostname },
   now: () => Date.now(),
   random: Math.random,
   storage: () => localStorage
@@ -276,4 +276,4 @@ export {
   COOKIE_DAYS
 };
 
-//# debugId=B81E7B73C766D70D64756E2164756E21
+//# debugId=E208B605EEAC472364756E2164756E21

@@ -287,7 +287,7 @@ function arrivalProps(arrival, options = {}) {
     props[name] = value;
   return props;
 }
-function routePattern(path, patterns) {
+function matchRoute(path, patterns) {
   const segments = path.split("/").filter(Boolean);
   for (const pattern of patterns) {
     const parts = pattern.split("/").filter(Boolean);
@@ -301,7 +301,7 @@ function routePattern(path, patterns) {
         matched = false;
         break;
       }
-      if (part.startsWith(":") || part.includes(":")) {
+      if (part.includes(":")) {
         const [prefix = ""] = part.split(":", 1);
         if (!segment.startsWith(prefix)) {
           matched = false;
@@ -317,7 +317,10 @@ function routePattern(path, patterns) {
     if (matched && parts.length === segments.length)
       return pattern;
   }
-  return path;
+  return;
+}
+function routePattern(path, patterns) {
+  return matchRoute(path, patterns) ?? path;
 }
 function cleanUrl(value, routes = []) {
   const cut = value.indexOf("#");
@@ -400,6 +403,7 @@ export {
   refLabel,
   parseFirstTouch,
   mondayOf,
+  matchRoute,
   firstTouchProps,
   clickKind,
   cleanUrl,
@@ -418,4 +422,4 @@ export {
   CAMPAIGNS
 };
 
-//# debugId=073FFBAF2DA3E84664756E2164756E21
+//# debugId=6C877DD5D1E3DBB264756E2164756E21

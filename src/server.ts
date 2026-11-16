@@ -100,12 +100,23 @@ export async function captureBody(config: ServerConfig, input: Capture): Promise
   };
 }
 
-/** Sends one event after the response (`waitUntil`), with a deadline; a failure is silent. */
-export function capture(config: ServerConfig, input: Capture | Promise<Capture | undefined>, waitUntil?: (job: Promise<unknown>) => void): Promise<void> {
-  if (config.token === undefined || config.token === "") return Promise.resolve();
+/**
+ * Sends one event after the response (`waitUntil`), with a deadline; a failure is silent. Pass a function to build
+ * the event only when it will be sent: anything it throws is caught with the rest.
+ */
+export function capture(
+  config: ServerConfig,
+  input: Capture | Promise<Capture | undefined> | (() => Capture | Promise<Capture | undefined> | undefined),
+  waitUntil?: (job: Promise<unknown>) => void,
+): Promise<void> {
+  if (config.token === undefined || config.token === "") {
+    // A promise the caller already started must not reject unobserved.
+    if (input instanceof Promise) input.catch(() => undefined);
+    return Promise.resolve();
+  }
   const send = config.fetch ?? fetch;
   return later(waitUntil, config.timeoutMs ?? 3000, async (signal) => {
-    const event = await input;
+    const event = await (typeof input === "function" ? input() : input);
     if (event === undefined) return;
     await send(`${(config.host ?? "https://us.i.posthog.com").replace(/\/$/u, "")}${CAPTURE_PATH}`, {
       method: "POST",
@@ -280,11 +291,11 @@ export async function billingEvent(stripe: unknown, options: BillingOptions): Pr
  * the browser identified.
  */
 export function captureBilling(config: ServerConfig & Readonly<{ secret: string }>, stripe: unknown, options: BillingOptions, waitUntil?: (job: Promise<unknown>) => void): Promise<void> {
-  return capture(config, (async () => {
+  return capture(config, async () => {
     const mapped = await billingEvent(stripe, options);
     if (mapped === undefined) return undefined;
     return { event: mapped.event, key: mapped.key, at: mapped.at, distinctId: await accountDistinctId(config.secret, mapped.account), props: mapped.props, person: true };
-  })(), waitUntil);
+  }, waitUntil);
 }
 
 /** Checkout Session metadata that carries the first-touch labels to the webhook (`first_ref`, `first_source`, `plan`). */
@@ -359,7 +370,11 @@ export function parseWireEvent(value: unknown, events: WireEvents = {}, now = Ma
   for (const [key, item] of Object.entries(bagged)) {
     if (typeof item !== "string") return undefined;
     const rule = Object.hasOwn(allowed, key) ? allowed[key] : COMMON_PROPS[key];
-    if (!allows(rule, item)) return undefined;
+    if (!allows(rule, item)) {
+      // An MCP client this version does not know yet is left out; the event still counts.
+      if (key === "client" && rule !== undefined) continue;
+      return undefined;
+    }
     props[key] = item;
   }
   // A clock that is off, or an event queued while offline: kept within a month, else now.
@@ -392,24 +407,52 @@ export async function wireCapture(config: ServerConfig, event: WireEvent, once: 
   };
 }
 
+const WIRE_LIMIT = 16_384;
+
+/** The body as text, or undefined once it passes `limit` bytes (read in chunks, whatever `content-length` says). */
+async function readCapped(request: Request, limit: number): Promise<string | undefined> {
+  if (request.body === null) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => undefined);
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 /** `POST /api/app/event` or `/api/cli/event`: parse, capture after the response, and answer 204 either way. */
 export async function wireHandler(config: ServerConfig, request: Request, events: WireEvents = {}, waitUntil?: (job: Promise<unknown>) => void): Promise<Response> {
   const empty = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
   const length = Number(request.headers.get("content-length") ?? "0");
-  if (length > 16_384) return new Response(null, { status: 413 });
+  if (length > WIRE_LIMIT) return new Response(null, { status: 413 });
   let body: unknown;
   try {
-    const text = await request.text();
-    if (text.length > 16_384) return new Response(null, { status: 413 });
+    const text = await readCapped(request, WIRE_LIMIT);
+    if (text === undefined) return new Response(null, { status: 413 });
     body = JSON.parse(text);
   } catch {
     return new Response(null, { status: 400 });
   }
   const list = Array.isArray(body) ? body.slice(0, 20) : [body];
-  const parsed = list.map((item) => parseWireEvent(item, events));
-  if (parsed.some((item) => item === undefined)) return new Response(null, { status: 400 });
-  for (const event of parsed) if (event !== undefined) void capture(config, wireCapture(config, event), waitUntil);
+  // A bad event is dropped on its own; the batch fails only when nothing in it is good.
+  const parsed = list.map((item) => parseWireEvent(item, events)).filter((item) => item !== undefined);
+  if (parsed.length === 0) return new Response(null, { status: 400 });
+  for (const event of parsed) void capture(config, () => wireCapture(config, event), waitUntil);
   return empty();
 }
 

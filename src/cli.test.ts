@@ -136,6 +136,23 @@ describe("CLI telemetry", () => {
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
+  test("one deadline covers the whole flush, however many batches, even when fetch ignores its signal", async () => {
+    let calls = 0;
+    const { telemetry } = await setup({}, "America/New_York", {
+      timeoutMs: 50,
+      fetch: (() => {
+        calls += 1;
+        // Each batch alone fits the limit; three in a row would not, and a stalled one never settles.
+        return calls === 3 ? new Promise(() => undefined) : new Promise((resolve) => setTimeout(() => { resolve(new Response(null, { status: 204 })); }, 30));
+      }) as unknown as typeof fetch,
+    });
+    for (let index = 0; index < 100; index += 1) telemetry.commandRun("publish", true, 10);
+    const started = Date.now();
+    await telemetry.flush();
+    expect(Date.now() - started).toBeLessThan(200);
+    expect(calls).toBeLessThanOrEqual(2);
+  });
+
   test("wire fields", () => {
     expect(wireVersion("v2.10.3-rc.1")).toBe("2.10.3");
     expect(wireVersion("nonsense")).toBe("0");

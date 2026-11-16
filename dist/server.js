@@ -297,11 +297,16 @@ async function captureBody(config, input) {
   };
 }
 function capture(config, input, waitUntil) {
-  if (config.token === undefined || config.token === "")
+  if (config.token === undefined || config.token === "") {
+    if (input instanceof Promise)
+      input.catch(() => {
+        return;
+      });
     return Promise.resolve();
+  }
   const send = config.fetch ?? fetch;
   return later(waitUntil, config.timeoutMs ?? 3000, async (signal) => {
-    const event = await input;
+    const event = await (typeof input === "function" ? input() : input);
     if (event === undefined)
       return;
     await send(`${(config.host ?? "https://us.i.posthog.com").replace(/\/$/u, "")}${CAPTURE_PATH}`, {
@@ -446,12 +451,12 @@ async function billingEvent(stripe, options) {
   return;
 }
 function captureBilling(config, stripe, options, waitUntil) {
-  return capture(config, (async () => {
+  return capture(config, async () => {
     const mapped = await billingEvent(stripe, options);
     if (mapped === undefined)
       return;
     return { event: mapped.event, key: mapped.key, at: mapped.at, distinctId: await accountDistinctId(config.secret, mapped.account), props: mapped.props, person: true };
-  })(), waitUntil);
+  }, waitUntil);
 }
 function checkoutMetadata(input) {
   const out = {};
@@ -513,8 +518,11 @@ function parseWireEvent(value, events = {}, now = Math.floor(Date.now() / 1000))
     if (typeof item !== "string")
       return;
     const rule = Object.hasOwn(allowed, key) ? allowed[key] : COMMON_PROPS[key];
-    if (!allows(rule, item))
+    if (!allows(rule, item)) {
+      if (key === "client" && rule !== undefined)
+        continue;
       return;
+    }
     props[key] = item;
   }
   const at = typeof input.at === "number" && Number.isSafeInteger(input.at) && input.at > now - 30 * 86400 && input.at < now + 600 ? input.at : now;
@@ -541,29 +549,56 @@ async function wireCapture(config, event, once = new Set(["app installed"])) {
     }
   };
 }
+var WIRE_LIMIT = 16384;
+async function readCapped(request, limit) {
+  if (request.body === null)
+    return "";
+  const reader = request.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;; ) {
+    const { done, value } = await reader.read();
+    if (done)
+      break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => {
+        return;
+      });
+      return;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 async function wireHandler(config, request, events = {}, waitUntil) {
   const empty = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
   if (request.method !== "POST")
     return new Response(null, { status: 405, headers: { allow: "POST" } });
   const length = Number(request.headers.get("content-length") ?? "0");
-  if (length > 16384)
+  if (length > WIRE_LIMIT)
     return new Response(null, { status: 413 });
   let body;
   try {
-    const text = await request.text();
-    if (text.length > 16384)
+    const text = await readCapped(request, WIRE_LIMIT);
+    if (text === undefined)
       return new Response(null, { status: 413 });
     body = JSON.parse(text);
   } catch {
     return new Response(null, { status: 400 });
   }
   const list = Array.isArray(body) ? body.slice(0, 20) : [body];
-  const parsed = list.map((item) => parseWireEvent(item, events));
-  if (parsed.some((item) => item === undefined))
+  const parsed = list.map((item) => parseWireEvent(item, events)).filter((item) => item !== undefined);
+  if (parsed.length === 0)
     return new Response(null, { status: 400 });
   for (const event of parsed)
-    if (event !== undefined)
-      capture(config, wireCapture(config, event), waitUntil);
+    capture(config, () => wireCapture(config, event), waitUntil);
   return empty();
 }
 function downloadServed(config, input, waitUntil) {
@@ -618,4 +653,4 @@ export {
   CAPTURE_PATH
 };
 
-//# debugId=927AA1C860AB12AE64756E2164756E21
+//# debugId=1099E6682204E94764756E2164756E21

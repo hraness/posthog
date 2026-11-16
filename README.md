@@ -147,7 +147,7 @@ runs inside a native shell. Its methods:
 | `native` | none | Returns true inside a native app shell, where nothing runs. |
 | `words` | English | The banner's text. |
 | `privacyHref` | none | Link to your privacy page from the banner. |
-| `onAds` / `onAdsOff` | none | Called when ads become allowed and when they must stop. Start the Meta Pixel here. |
+| `onAds` / `onAdsOff` | none | Called when ads become allowed and when they must stop. Start the Meta Pixel here with `startPixel(browserPage(href), ...)`, where `href` is the page address with launch tags cut. |
 | `askDelayMs` | `2500` | Delay before the banner appears. |
 
 ### What leaves the page

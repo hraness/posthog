@@ -72,8 +72,11 @@ export type BrowserConfig = Readonly<{
   native?: () => boolean;
   words?: ConsentWords;
   privacyHref?: string;
-  /** Called once when the policy allows ads (and again after an ads yes). Compose `@hraness/analytics/meta` here. */
-  onAds?: (context: { fbclid: string | undefined; allowed: () => boolean }) => void;
+  /**
+   * Called once when the policy allows ads (and again after an ads yes). Compose `@hraness/analytics/meta` here, with
+   * `startPixel(browserPage(href), ...)`: `href` is this page's address with launch tags and content parameters cut.
+   */
+  onAds?: (context: { fbclid: string | undefined; href: string; allowed: () => boolean }) => void;
   /** Called when ads must stop (an ads no, GPC, an analytics no). */
   onAdsOff?: () => void;
   /** Milliseconds before the banner appears. Default 2500. */
@@ -229,4 +232,51 @@ export function linkChoice(search: string): Readonly<{ analytics?: Choice; ads?:
 export function fromPrivateElement(properties: Record<string, unknown> | undefined): boolean {
   const chain = properties?.$elements_chain;
   return typeof chain === "string" && /data-private|ph-no-capture/u.test(chain);
+}
+
+// --- Region, ads address and private paths ----------------------------------------------------------------------
+
+/** The region endpoint with `?tz=` added, so a request that reaches the edge without a country still lands right. */
+export function regionAddress(base: string, zone: string | undefined): string {
+  if (zone === undefined || !/^[A-Za-z0-9_+/-]{1,64}$/u.test(zone)) return base;
+  return `${base}${base.includes("?") ? "&" : "?"}tz=${encodeURIComponent(zone)}`;
+}
+
+/**
+ * The address Meta may see: only `fbclid` and `utm_*` kept, nothing after `#`. Launch tags (`ref`, `via`) and content
+ * parameters are cut, so a tagged landing still sends its PageView without handing Meta the tag.
+ */
+export function adsAddress(href: string): string {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return href;
+  }
+  url.hash = "";
+  for (const name of [...url.searchParams.keys()]) {
+    if (name !== "fbclid" && !name.startsWith("utm_")) url.searchParams.delete(name);
+  }
+  return url.toString();
+}
+
+const ALLOWLISTED_ELEMENT = /(?:^|;)(?:a|button)(?=[.:;]|$)|attr__data-ph=/u;
+
+/**
+ * An event as kept on a private path, or null when it is dropped: no heatmaps, rage or dead clicks, clicks only on
+ * links, buttons and `[data-ph]` elements with their text cut, and no page title.
+ */
+export function onPrivatePath(event: Readonly<{ event?: string; properties?: Record<string, unknown> }>): { event?: string; properties: Record<string, unknown> } | null {
+  const name = event.event;
+  if (name === "$$heatmap" || name === "$rageclick" || name === "$dead_click") return null;
+  const properties: Record<string, unknown> = { ...(event.properties ?? {}) };
+  if (name === "$autocapture") {
+    const chain = properties.$elements_chain;
+    if (typeof chain !== "string" || !ALLOWLISTED_ELEMENT.test(chain)) return null;
+    properties.$elements_chain = chain.replace(/text="(?:[^"\\]|\\.)*"/gu, "");
+    delete properties.$el_text;
+    delete properties.$elements;
+  }
+  delete properties.$title;
+  return { ...event, properties };
 }
