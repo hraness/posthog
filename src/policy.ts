@@ -219,10 +219,12 @@ export function parseRegionResponse(value: unknown): RegionResponse | undefined 
   return { country, region_group: region, gpc, policy: policyForGroup(region, gpc, {}) };
 }
 
+/** A representative country per group, for re-deriving a policy when only the group is known. */
+export const GROUP_COUNTRY: Readonly<Record<RegionGroup, string>> = { eu: "DE", uk_ch: "GB", br: "BR", us: "US", row: "JP" };
+
 /** The policy for a known group (used when only the group crosses a boundary, as in native apps and the CLI). */
 export function policyForGroup(group: RegionGroup, gpc: boolean, choices: Choices): RegionPolicy {
-  const country = { eu: "DE", uk_ch: "GB", br: "BR", us: "US", row: "JP" }[group];
-  return regionPolicy({ country, gpc, choices });
+  return regionPolicy({ country: GROUP_COUNTRY[group], gpc, choices });
 }
 
 /** Whether a non-browser client (app, CLI) sends usage counts: opt-in in the EU, opt-out elsewhere. */

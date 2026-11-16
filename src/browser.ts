@@ -34,7 +34,7 @@ import {
   type ConsentWords,
 } from "./browser-config.ts";
 import { MILESTONES, SCHEMA, type EventName, type Props, type PropsOf } from "./events.ts";
-import { parseRegionResponse, regionPolicy, type Choices, type RegionPolicy } from "./policy.ts";
+import { GROUP_COUNTRY, parseRegionResponse, regionPolicy, type Choices, type RegionPolicy } from "./policy.ts";
 
 export * from "./browser-config.ts";
 export {
@@ -221,9 +221,9 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     return patterns.length > 0 && routePattern(path, patterns) !== path;
   };
 
-  async function region(): Promise<{ country: string | null; group?: string }> {
+  async function region(): Promise<{ country: string | null }> {
     const injected = parseRegionResponse((window as { __hranessRegion?: unknown }).__hranessRegion);
-    if (injected) return { country: injected.country };
+    if (injected) return { country: injected.country ?? GROUP_COUNTRY[injected.region_group] };
     if (config.regionUrl === false) return { country: null };
     try {
       const controller = new AbortController();
@@ -231,7 +231,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       const response = await fetch(config.regionUrl ?? "/api/region", { credentials: "omit", signal: controller.signal });
       clearTimeout(timer);
       const parsed = parseRegionResponse(response.ok ? await response.json() : undefined);
-      return { country: parsed?.country ?? null };
+      return { country: parsed === undefined ? null : parsed.country ?? GROUP_COUNTRY[parsed.region_group] };
     } catch {
       return { country: null };
     }
@@ -445,7 +445,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       store(next);
       send("analytics choice made", { choice, scope });
       const was = policy;
-      policy = currentPolicy(was === undefined ? null : countryOf(was));
+      policy = currentPolicy(was === undefined ? null : GROUP_COUNTRY[was.region_group]);
       if (choice === "no") {
         client?.stopSessionRecording();
         if (scope === "all") forget();
@@ -487,7 +487,3 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   return api;
 }
 
-/** The region a computed policy stands for, so an answer can be re-applied without asking the edge again. */
-function countryOf(policy: RegionPolicy): string {
-  return { eu: "DE", uk_ch: "GB", br: "BR", us: "US", row: "JP" }[policy.region_group];
-}
