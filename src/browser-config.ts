@@ -260,11 +260,19 @@ export function adsAddress(href: string): string {
   return url.toString();
 }
 
+/** Page title properties dropped on private paths. */
+const PAGE_NAMES = ["$title", "title", "$page_title", "page_title", "$document_title"] as const;
+/**
+ * Chain parts that can name private content: text, links, ids and every attribute (`aria-label`, `title`, `alt`,
+ * `name`, `value`, ...) except `data-ph`, the allowlist marker.
+ */
+const PRIVATE_CHAIN_ATTRIBUTE = /(?:attr__(?!data-ph=)[\w:-]+|attr_id|href|text)="(?:[^"\\]|\\.)*"/gu;
+
 const ALLOWLISTED_ELEMENT = /(?:^|;)(?:a|button)(?=[.:;]|$)|attr__data-ph=/u;
 
 /**
  * An event as kept on a private path, or null when it is dropped: no heatmaps, rage or dead clicks, clicks only on
- * links, buttons and `[data-ph]` elements with their text cut, and no page title.
+ * links, buttons and `[data-ph]` elements with their text, links and attributes cut, and no page title.
  */
 export function onPrivatePath(event: Readonly<{ event?: string; properties?: Record<string, unknown> }>): { event?: string; properties: Record<string, unknown> } | null {
   const name = event.event;
@@ -273,10 +281,12 @@ export function onPrivatePath(event: Readonly<{ event?: string; properties?: Rec
   if (name === "$autocapture") {
     const chain = properties.$elements_chain;
     if (typeof chain !== "string" || !ALLOWLISTED_ELEMENT.test(chain)) return null;
-    properties.$elements_chain = chain.replace(/text="(?:[^"\\]|\\.)*"/gu, "");
+    properties.$elements_chain = chain.replace(PRIVATE_CHAIN_ATTRIBUTE, "");
     delete properties.$el_text;
     delete properties.$elements;
+    delete properties.$external_click_url;
   }
-  delete properties.$title;
+  // posthog-js sends the page title as `$title` and, on the first pageview, as plain `title`.
+  for (const name of PAGE_NAMES) Reflect.deleteProperty(properties, name);
   return { ...event, properties };
 }

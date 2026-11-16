@@ -494,6 +494,16 @@ function cleanBag(props: Record<string, unknown>, options: CleanOptions, depth: 
   return out;
 }
 
+/**
+ * A whole event cleaned. `allowProps` applies to its `properties` only, so the event's own fields (`event`, `uuid`,
+ * `timestamp`) always stay; everything else is cleaned as `cleanProps` cleans it.
+ */
+export function cleanEvent(event: Readonly<{ properties?: Record<string, unknown> }> & Readonly<Record<string, unknown>>, options: CleanOptions = {}): Record<string, unknown> & { properties: Record<string, unknown> } {
+  const { properties, ...rest } = event;
+  const fields = cleanBag(rest, options.routes === undefined ? {} : { routes: options.routes }, 0, false);
+  return { ...fields, properties: cleanBag(properties ?? {}, options, 0, true) };
+}
+
 /** Every property at any depth cleaned: addresses, referrers, labels, click IDs and emails. */
 export function cleanProps<T extends Record<string, unknown>>(props: T, options: CleanOptions = {}): Partial<T> {
   return cleanBag(props, options, 0, true) as Partial<T>;

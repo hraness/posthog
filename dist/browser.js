@@ -422,6 +422,11 @@ function cleanBag(props, options, depth, top) {
   }
   return out;
 }
+function cleanEvent(event, options = {}) {
+  const { properties, ...rest } = event;
+  const fields = cleanBag(rest, options.routes === undefined ? {} : { routes: options.routes }, 0, false);
+  return { ...fields, properties: cleanBag(properties ?? {}, options, 0, true) };
+}
 function cleanProps(props, options = {}) {
   return cleanBag(props, options, 0, true);
 }
@@ -572,6 +577,8 @@ function adsAddress(href) {
   }
   return url.toString();
 }
+var PAGE_NAMES = ["$title", "title", "$page_title", "page_title", "$document_title"];
+var PRIVATE_CHAIN_ATTRIBUTE = /(?:attr__(?!data-ph=)[\w:-]+|attr_id|href|text)="(?:[^"\\]|\\.)*"/gu;
 var ALLOWLISTED_ELEMENT = /(?:^|;)(?:a|button)(?=[.:;]|$)|attr__data-ph=/u;
 function onPrivatePath(event) {
   const name = event.event;
@@ -582,11 +589,13 @@ function onPrivatePath(event) {
     const chain = properties.$elements_chain;
     if (typeof chain !== "string" || !ALLOWLISTED_ELEMENT.test(chain))
       return null;
-    properties.$elements_chain = chain.replace(/text="(?:[^"\\]|\\.)*"/gu, "");
+    properties.$elements_chain = chain.replace(PRIVATE_CHAIN_ATTRIBUTE, "");
     delete properties.$el_text;
     delete properties.$elements;
+    delete properties.$external_click_url;
   }
-  delete properties.$title;
+  for (const name2 of PAGE_NAMES)
+    Reflect.deleteProperty(properties, name2);
   return { ...event, properties };
 }
 
@@ -997,8 +1006,9 @@ function createAnalytics(config) {
         const kept = isPrivate(location.pathname) ? onPrivatePath(event) : event;
         if (kept === null)
           return null;
-        const own = config.clean?.allowProps === undefined ? kept.properties : cleanProps(kept.properties ?? {}, { allowProps: [...config.clean.allowProps, ...Object.keys(facts)] });
-        const cleaned = cleanProps({ ...kept, properties: { ...own, ...facts } }, { routes: [...config.clean?.routes ?? [], ...config.privatePaths ?? []] });
+        const allowProps = config.clean?.allowProps;
+        const routes = [...config.clean?.routes ?? [], ...config.privatePaths ?? []];
+        const cleaned = cleanEvent({ ...kept, properties: { ...kept.properties, ...facts } }, allowProps === undefined ? { routes } : { routes, allowProps: [...allowProps, ...Object.keys(facts)] });
         queueMicrotask(() => {
           tidy(event.event);
         });
@@ -1290,4 +1300,4 @@ export {
   DEFAULT_PRIVATE_SELECTOR
 };
 
-//# debugId=6EE438A756BCF1C564756E2164756E21
+//# debugId=0DF168A1E9395ECC64756E2164756E21

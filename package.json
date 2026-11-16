@@ -1,6 +1,6 @@
 {
   "name": "@hraness/analytics",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "One PostHog analytics standard for websites, docs, web apps, Workers, CLIs and Mac apps: a region policy, consent banner, first-touch attribution, Meta Pixel and Conversions API gates, server capture and opt-out CLI telemetry.",
   "license": "MIT",
   "type": "module",
