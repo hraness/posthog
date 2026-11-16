@@ -358,6 +358,9 @@ var REF_FIELD = /^(?:(?:\$(?:initial_|session_entry_)?)?(?:ref|via)|(?:first|las
 var CLICK_FIELD = /^(?:\$(?:initial_|session_entry_)?)?(gclid|gclsrc|dclid|fbclid|msclkid|twclid|ttclid|li_fat_id|igshid|wbraid|gbraid|gad_source|mc_cid|mc_eid)$/iu;
 var EMAIL = /[^\s@<>()"',;:]{1,64}@[^\s@<>()"',;:]{1,255}\.[a-z]{2,}/giu;
 var plain = (value) => typeof value === "object" && value !== null && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+function cleanChain(chain, routes) {
+  return cleanText(chain.replace(/((?:attr__)?href=")([^"]*)"/gu, (_whole, name, href) => `${name}${cleanUrl(href, routes)}"`), routes).replace(EMAIL, "[email]");
+}
 function cleanValue(key, value, options, depth) {
   if (CLICK_FIELD.test(key))
     return;
@@ -369,6 +372,8 @@ function cleanValue(key, value, options, depth) {
   if (typeof value === "string") {
     if (/referrer/iu.test(key))
       return value === "$direct" ? value : referrerSite(value);
+    if (key === "$elements_chain")
+      return cleanChain(value, routes);
     const text = LINKISH.test(key) && !/\s/u.test(value) ? key.toLowerCase().includes("pathname") ? routePattern(value, routes) : cleanText(cleanUrl(value, routes), routes) : cleanText(value, routes);
     return text.replace(EMAIL, "[email]");
   }
@@ -378,15 +383,34 @@ function cleanValue(key, value, options, depth) {
     return value.map((item) => cleanValue(key, item, options, depth + 1));
   return plain(value) ? cleanBag(value, options, depth + 1, false) : value;
 }
+function cleanKey(key, routes) {
+  if (/^[\w$.:-]*$/u.test(key))
+    return key;
+  const text = /^(?:https?:\/\/|\/)\S*$/iu.test(key) ? cleanUrl(key, routes) : cleanText(key, routes);
+  return text.replace(EMAIL, "[email]");
+}
+function mergeValues(first, second) {
+  if (Array.isArray(first) && Array.isArray(second))
+    return [...first, ...second];
+  if (plain(first) && plain(second)) {
+    const out = { ...first };
+    for (const [key, value] of Object.entries(second))
+      out[key] = Object.hasOwn(out, key) ? mergeValues(out[key], value) : value;
+    return out;
+  }
+  return first;
+}
 function cleanBag(props, options, depth, top) {
   const out = {};
   const allow = options.allowProps === undefined ? undefined : new Set(options.allowProps);
-  for (const [key, value] of Object.entries(props)) {
-    if (top && allow !== undefined && !key.startsWith("$") && !allow.has(key))
+  for (const [raw, value] of Object.entries(props)) {
+    if (top && allow !== undefined && !raw.startsWith("$") && !allow.has(raw))
       continue;
+    const key = cleanKey(raw, options.routes ?? []);
     const cleaned = cleanValue(key, value, options, depth);
-    if (cleaned !== undefined)
-      out[key] = cleaned;
+    if (cleaned === undefined)
+      continue;
+    out[key] = Object.hasOwn(out, key) ? mergeValues(out[key], cleaned) : cleaned;
   }
   return out;
 }
@@ -684,4 +708,4 @@ export {
   BR_COUNTRIES
 };
 
-//# debugId=F47028557CC63A0164756E2164756E21
+//# debugId=222C91742AADFB4C64756E2164756E21

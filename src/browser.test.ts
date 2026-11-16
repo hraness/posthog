@@ -294,6 +294,67 @@ describe("the browser client", () => {
     expect(tab.jar.has("_fbp") || tab.jar.has("_fbc")).toBe(false);
   });
 
+  test("no email, fragment or unlisted parameter reaches PostHog in any key or value", async () => {
+    page({ href: "https://example.com/p?secret=1&ref=hn#frag", zone: "America/New_York", region: { country: "US", region_group: "us", gpc: false } });
+    createAnalytics({ ...base, preset: "marketing" });
+    await settle();
+    const ph = latest();
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    const start = ph.sent.length;
+    const probe = "probe@example.com";
+    const dirty = "https://example.com/p?secret=1&ref=hn#frag";
+    const point = { x: 1, y: 2, target_fixed: false, type: "click" };
+    capture("$pageview", { $current_url: dirty, $pathname: "/p", $title: `Hello ${probe}`, $referrer: `https://other.example/?secret=1#frag`, $prev_pageview_url: dirty });
+    capture("$autocapture", {
+      $current_url: dirty,
+      $elements_chain: `a.nav:attr__href="/p?secret=1&ref=hn#frag"href="/p?secret=1#frag"text="${probe}"nth-child="1"`,
+      $elements: [{ tag_name: "a", attr__href: "/p?secret=1#frag", $el_text: probe }],
+      $el_text: probe,
+    });
+    capture("$$heatmap", {
+      $current_url: dirty,
+      $heatmap_data: {
+        [dirty]: [point],
+        "https://example.com/p#other": [point],
+        "https://example.com/p?secret=2": [point],
+        [`https://example.com/u/${probe}?secret=3`]: [point],
+      },
+    });
+    capture("$web_vitals", {
+      $current_url: dirty,
+      $web_vitals_LCP_value: 1200,
+      $web_vitals_LCP_event: { name: "LCP", value: 1200, $current_url: dirty, attribution: { url: dirty, element: "img", navigationEntry: { name: dirty } } },
+    });
+    capture("$exception", {
+      $current_url: dirty,
+      $exception_list: [{
+        type: "Error",
+        value: `failed for ${probe} at ${dirty}`,
+        stacktrace: { type: "raw", frames: [{ filename: dirty, abs_path: "https://example.com/app.js?secret=1#frag", function: "go", lineno: 1 }] },
+      }],
+    });
+    const sent = ph.sent.slice(start);
+    expect(sent).toHaveLength(5);
+    const seen: string[] = [];
+    const walk = (value: unknown) => {
+      if (typeof value === "string") seen.push(value);
+      else if (Array.isArray(value)) for (const item of value) walk(item);
+      else if (typeof value === "object" && value !== null) for (const [key, item] of Object.entries(value)) { seen.push(key); walk(item); }
+    };
+    walk(sent);
+    for (const text of seen) {
+      expect(text).not.toContain(probe);
+      expect(text).not.toContain("#frag");
+      expect(text).not.toContain("#other");
+      expect(text).not.toContain("secret=");
+    }
+    // Heatmap entries whose addresses clean to the same page are merged, not lost.
+    const heatmap = sent[2]?.properties.$heatmap_data as Record<string, unknown[]>;
+    expect(heatmap["https://example.com/p"]).toHaveLength(2);
+    expect(heatmap["https://example.com/p?ref=hn"]).toHaveLength(1);
+    expect(Object.values(heatmap).flat()).toHaveLength(4);
+  });
+
   test("a message before the body exists waits for it instead of throwing", () => {
     const tab = page({ href: "https://example.com/?ads=off", zone: "America/New_York", body: false });
     expect(() => createAnalytics({ ...base, preset: "marketing" })).not.toThrow();

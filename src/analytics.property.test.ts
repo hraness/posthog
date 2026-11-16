@@ -139,3 +139,18 @@ test("property: stored values never throw and never invent answers", () => {
     expect(mergeChoices({ analytics, ads }, { analytics: "no" }).analytics).toBe("no");
   }));
 });
+
+test("property: URL-keyed bags keep no fragment or unlisted parameter in any key, and lose no entries", () => {
+  fc.assert(
+    fc.property(fc.array(fc.webUrl({ withQueryParameters: true, withFragments: true }), { minLength: 1, maxLength: 6 }), (hrefs) => {
+      const data: Record<string, unknown[]> = {};
+      for (const href of hrefs) data[href] = [...(data[href] ?? []), { x: 1 }];
+      const cleaned = cleanProps({ $heatmap_data: data }).$heatmap_data as Record<string, unknown[]>;
+      for (const key of Object.keys(cleaned)) {
+        expect(key).not.toContain("#");
+        expect(key).toBe(cleanUrl(key));
+      }
+      expect(Object.values(cleaned).flat()).toHaveLength(hrefs.length);
+    }),
+  );
+});
