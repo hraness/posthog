@@ -1,49 +1,17 @@
 import { rm } from "node:fs/promises";
 
-// Bun can retain source directives after bundled imports. Emit this boundary
-// only as a banner so each published client entry has one valid prologue.
-const CLIENT_DIRECTIVE = '"use client";';
+type BuildGroup = Readonly<{ entrypoints: readonly string[]; target: "browser" | "node" }>;
 
-type BuildGroup = Readonly<{
-  entrypoints: readonly string[];
-  target: "browser" | "node";
-  banner?: string;
-  external?: readonly string[];
-}>;
-
+// Each entry is built on its own so shared helpers are inlined rather than split into unstable chunks.
 const groups: readonly BuildGroup[] = [
-  {
-    entrypoints: ["src/site.ts", "src/event.ts", "src/traffic.ts", "src/consent.ts"],
-    target: "browser",
-  },
-  {
-    entrypoints: ["src/client.ts"],
-    external: ["./consent*"],
-    target: "browser",
-    banner: CLIENT_DIRECTIVE,
-  },
-  {
-    entrypoints: ["src/react.tsx"],
-    target: "browser",
-    banner: CLIENT_DIRECTIVE,
-    external: ["./client*"],
-  },
-  {
-    entrypoints: ["src/server.ts", "src/next-config.ts"],
-    target: "node",
-  },
-  {
-    entrypoints: ["src/testing.ts"],
-    target: "node",
-  },
-  {
-    // The harness must define browser globals before posthog-js evaluates.
-    // Bundling would hoist the client's static posthog-js imports above that
-    // setup, so the harness loads the published client entry dynamically.
-    entrypoints: ["src/testing-harness.ts"],
-    target: "node",
-    external: ["./client*"],
-  },
+  { entrypoints: ["src/index.ts"], target: "browser" },
+  { entrypoints: ["src/policy.ts"], target: "browser" },
+  { entrypoints: ["src/events.ts"], target: "browser" },
+  { entrypoints: ["src/attribution.ts"], target: "browser" },
+  { entrypoints: ["src/browser.ts"], target: "browser" },
+  { entrypoints: ["src/meta.ts"], target: "browser" },
+  { entrypoints: ["src/server.ts"], target: "browser" },
+  { entrypoints: ["src/cli.ts"], target: "node" },
 ];
 
 await rm("dist", { recursive: true, force: true });
@@ -57,13 +25,9 @@ for (const group of groups) {
     packages: "external",
     sourcemap: "external",
     minify: false,
-    ...(group.banner ? { banner: group.banner } : {}),
-    ...(group.external ? { external: [...group.external] } : {}),
   });
   if (!result.success) {
-    for (const log of result.logs) {
-      console.error(log);
-    }
+    for (const log of result.logs) console.error(log);
     process.exit(1);
   }
 }

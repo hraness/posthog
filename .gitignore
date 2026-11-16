@@ -2,3 +2,5 @@ node_modules/
 .package-smoke-*/
 *.tgz
 *.tsbuildinfo
+.build/
+.swiftpm/

@@ -1,7 +1,7 @@
 {
-  "name": "@hraness/posthog",
-  "version": "0.3.12",
-  "description": "Cookieless PostHog analytics for Next.js, limited to the hosts, routes, and events your site declares, plus server error reporting and production source-map upload.",
+  "name": "@hraness/analytics",
+  "version": "1.0.0",
+  "description": "One PostHog analytics standard for websites, docs, web apps, Workers, CLIs and Mac apps: a region policy, consent banner, first-touch attribution, Meta Pixel and Conversions API gates, server capture and opt-out CLI telemetry.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -19,79 +19,61 @@
   },
   "keywords": [
     "analytics",
-    "cookieless",
-    "nextjs",
+    "attribution",
+    "consent",
+    "gpc",
     "posthog",
     "privacy",
-    "source-maps"
+    "telemetry"
   ],
   "exports": {
     ".": {
-      "types": "./src/site.ts",
-      "import": "./dist/site.js",
-      "default": "./dist/site.js"
+      "types": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
-    "./site": {
-      "types": "./src/site.ts",
-      "import": "./dist/site.js",
-      "default": "./dist/site.js"
+    "./policy": {
+      "types": "./src/policy.ts",
+      "import": "./dist/policy.js",
+      "default": "./dist/policy.js"
     },
-    "./client": {
-      "types": "./src/client.ts",
-      "import": "./dist/client.js",
-      "default": "./dist/client.js"
+    "./events": {
+      "types": "./src/events.ts",
+      "import": "./dist/events.js",
+      "default": "./dist/events.js"
     },
-    "./event": {
-      "types": "./src/event.ts",
-      "import": "./dist/event.js",
-      "default": "./dist/event.js"
+    "./attribution": {
+      "types": "./src/attribution.ts",
+      "import": "./dist/attribution.js",
+      "default": "./dist/attribution.js"
     },
-    "./next-config": {
-      "types": "./src/next-config.ts",
-      "import": "./dist/next-config.js",
-      "default": "./dist/next-config.js"
+    "./browser": {
+      "types": "./src/browser.ts",
+      "import": "./dist/browser.js",
+      "default": "./dist/browser.js"
     },
-    "./react": {
-      "types": "./src/react.tsx",
-      "import": "./dist/react.js",
-      "default": "./dist/react.js"
+    "./meta": {
+      "types": "./src/meta.ts",
+      "import": "./dist/meta.js",
+      "default": "./dist/meta.js"
     },
     "./server": {
       "types": "./src/server.ts",
       "import": "./dist/server.js",
       "default": "./dist/server.js"
     },
-    "./traffic": {
-      "types": "./src/traffic.ts",
-      "import": "./dist/traffic.js",
-      "default": "./dist/traffic.js"
-    },
-    "./testing": {
-      "types": "./src/testing.ts",
-      "import": "./dist/testing.js",
-      "default": "./dist/testing.js"
-    },
-    "./consent": {
-      "types": "./src/consent.ts",
-      "import": "./dist/consent.js",
-      "default": "./dist/consent.js"
+    "./cli": {
+      "types": "./src/cli.ts",
+      "import": "./dist/cli.js",
+      "default": "./dist/cli.js"
     }
   },
-  "main": "./dist/site.js",
-  "types": "./src/site.ts",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
   "files": [
     "dist",
-    "src/client.ts",
-    "src/consent.ts",
-    "src/event.ts",
-    "src/redaction.ts",
-    "src/next-config.ts",
-    "src/react.tsx",
-    "src/server.ts",
-    "src/site.ts",
-    "src/traffic.ts",
-    "src/testing-harness.ts",
-    "src/testing.ts",
+    "src/*.ts",
+    "!src/*.test.ts",
     "LICENSE",
     "README.md"
   ],
@@ -111,38 +93,21 @@
     "test": "bun test ./src",
     "test:property": "bun test ./src/*.property.test.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "check:code": "bun run check:portfolio-inventory && bun run check:product-contract && bun run check:public-boundary && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package",
+    "check:code": "bun run check:portfolio-inventory && bun run check:product-contract && bun run check:public-boundary && bun run check:swift-policy && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package",
     "check": "bun run check:code && bun run kb:check",
-    "prepack": "bun run check"
+    "prepack": "bun run check",
+    "check:swift-policy": "bun run ./scripts/generate-swift-policy.ts --check",
+    "swift:policy": "bun run ./scripts/generate-swift-policy.ts"
   },
   "dependencies": {
-    "@posthog/nextjs-config": "1.10.0",
-    "posthog-js": "1.422.5",
-    "posthog-node": "5.51.4"
-  },
-  "peerDependencies": {
-    "next": ">=16.2.0 <17.0.0",
-    "react": ">=19.2.0 <20.0.0"
-  },
-  "peerDependenciesMeta": {
-    "next": {
-      "optional": true
-    },
-    "react": {
-      "optional": true
-    }
+    "posthog-js": "1.449.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@types/bun": "^1.4.0",
     "@types/node": "^24.10.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.5",
     "eslint": "^9.39.2",
     "fast-check": "^4.8.0",
-    "next": "16.3.8",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.68.0"
   },

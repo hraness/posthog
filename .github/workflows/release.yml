@@ -69,7 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
-          package_file="hraness-posthog-${GITHUB_REF_NAME#v}.tgz"
+          package_file="hraness-analytics-${GITHUB_REF_NAME#v}.tgz"
           bun pm pack --ignore-scripts --filename "release/$package_file"
           (cd release && sha256sum "$package_file" > SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -105,7 +105,7 @@ jobs:
             echo "::error::Publish request does not match the verified tag"
             exit 1
           fi
-          package_file="hraness-posthog-${VERIFIED_TAG#v}.tgz"
+          package_file="hraness-analytics-${VERIFIED_TAG#v}.tgz"
           test -f "release/$package_file"
           test "$(find release -type f | wc -l)" -eq 2
           (cd release && sha256sum --check SHA256SUMS)
@@ -114,7 +114,7 @@ jobs:
             --verify-tag \
             --generate-notes \
             --draft \
-            --title "PostHog $GITHUB_REF_NAME"
+            --title "Analytics $GITHUB_REF_NAME"
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest
           release_state="$(gh release view "$GITHUB_REF_NAME" \
             --json assets,isDraft,isImmutable,isPrerelease,tagName \
@@ -124,7 +124,7 @@ jobs:
             echo "::error::Release $GITHUB_REF_NAME is not published and immutable"
             exit 1
           fi
-          published_dir="$RUNNER_TEMP/posthog-published"
+          published_dir="$RUNNER_TEMP/analytics-published"
           mkdir -p "$published_dir"
           gh release download "$GITHUB_REF_NAME" --dir "$published_dir" \
             --pattern "$package_file" --pattern SHA256SUMS

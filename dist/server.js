@@ -1,889 +1,656 @@
-// src/server.ts
-import { PostHog } from "posthog-node";
-
-// src/redaction.ts
-var MAX_INSPECTION_LENGTH = 32768;
-var MAX_DECODE_PASSES = 8;
-function percentCharacter(value, index) {
-  const first = value.slice(index, index + 3);
-  if (!/^%[0-9a-f]{2}$/iu.test(first))
-    return null;
-  const byte = Number.parseInt(first.slice(1), 16);
-  const count = byte < 128 ? 1 : byte >= 194 && byte <= 223 ? 2 : byte >= 224 && byte <= 239 ? 3 : byte >= 240 && byte <= 244 ? 4 : 0;
-  if (!count)
-    return null;
-  const encoded = value.slice(index, index + count * 3);
-  if (!/^(?:%[0-9a-f]{2})+$/iu.test(encoded) || encoded.length !== count * 3)
-    return null;
-  try {
-    return { text: decodeURIComponent(encoded), length: encoded.length };
-  } catch {
-    return null;
-  }
-}
-function emailSpans(value) {
-  const result = [];
-  const domain = new RegExp(String.raw`@[\p{L}\p{N}\p{M}.-]+\.[\p{L}\p{M}]{2,}`, "uy");
-  const localCharacter = new RegExp(String.raw`^[\p{L}\p{N}\p{M}._%+-]+$`, "u");
-  let previousAt = -1;
-  let previousEnd = 0;
-  for (let at = value.indexOf("@");at >= 0; at = value.indexOf("@", at + 1)) {
-    let start = at;
-    const floor = Math.max(previousAt + 1, previousEnd);
-    while (start > floor) {
-      const unit = value.charCodeAt(start - 1);
-      const width = unit >= 56320 && unit <= 57343 && start - 2 >= floor ? 2 : 1;
-      if (!localCharacter.test(value.slice(start - width, start)))
-        break;
-      start -= width;
-    }
-    const candidateStart = start;
-    while (start < at && /^[._%+-]$/u.test(value.charAt(start)))
-      start += 1;
-    if (start === at)
-      start = candidateStart;
-    previousAt = at;
-    if (start === at)
-      continue;
-    domain.lastIndex = at;
-    const match = domain.exec(value);
-    if (!match)
-      continue;
-    const end = at + match[0].length;
-    result.push({ start, end });
-    previousEnd = end;
-  }
-  return result;
-}
-function userinfoSpans(value) {
-  const result = [];
-  for (let colon = value.indexOf("://");colon >= 0; colon = value.indexOf("://", colon + 3)) {
-    let scheme = colon;
-    while (scheme > 0 && /^[a-z0-9+.-]$/iu.test(value.charAt(scheme - 1)))
-      scheme -= 1;
-    while (scheme < colon && !/^[a-z]$/iu.test(value.charAt(scheme)))
-      scheme += 1;
-    if (scheme === colon)
-      continue;
-    const start = colon + 3;
-    let end = start;
-    let at = -1;
-    while (end < value.length && !/[/\s?#]/u.test(value.charAt(end))) {
-      if (value.charAt(end) === "@")
-        at = end;
-      end += 1;
-    }
-    if (at > start)
-      result.push({ start, end: at });
-  }
-  return result;
-}
-function redactEncodedIdentifiers(value) {
-  let shadow = value;
-  let spans = Array.from({ length: value.length }, (_, index) => ({ start: index, end: index + 1 }));
-  const spanAt = (index) => spans[index] ?? { start: 0, end: value.length };
-  for (let pass = 0;pass < MAX_DECODE_PASSES && shadow.includes("%"); pass += 1) {
-    let decoded = "";
-    const decodedSpans = [];
-    let changed = false;
-    for (let index = 0;index < shadow.length; index += 1) {
-      const escape = percentCharacter(shadow, index);
-      if (escape) {
-        decoded += escape.text;
-        const span = { start: spanAt(index).start, end: spanAt(index + escape.length - 1).end };
-        for (let unit = 0;unit < escape.text.length; unit += 1)
-          decodedSpans.push(span);
-        index += escape.length - 1;
-        changed = true;
-      } else {
-        decoded += shadow.charAt(index);
-        decodedSpans.push(spanAt(index));
-      }
-    }
-    shadow = decoded;
-    spans = decodedSpans;
-    if (!changed)
-      break;
-  }
-  const replacements = [];
-  const unresolvedSpans = Array.from(shadow.matchAll(/%[0-9a-f]{2}/giu)).filter((match) => percentCharacter(shadow, match.index) !== null).map((match) => spanAt(match.index));
-  let unresolvedIndex = 0;
-  for (const segment of value.matchAll(/[^\s/?#]+/gu)) {
-    const end = segment.index + segment[0].length;
-    while (unresolvedSpans[unresolvedIndex] && (unresolvedSpans[unresolvedIndex]?.start ?? Infinity) < segment.index)
-      unresolvedIndex += 1;
-    if (unresolvedSpans[unresolvedIndex] && (unresolvedSpans[unresolvedIndex]?.start ?? Infinity) < end) {
-      replacements.push({ start: segment.index, end, replacement: "[redacted]", priority: 0 });
-    }
-  }
-  const patterns = [
-    [/(\bBearer\s+)([A-Za-z0-9._~+/=-]+)\b/giu, "[credential]"],
-    [/(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=)([^\s&]+)/giu, "[redacted]"],
-    [/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]"],
-    [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]"]
-  ];
-  for (const [priority, [pattern, replacement]] of patterns.entries()) {
-    for (const match of shadow.matchAll(pattern)) {
-      const offset = match.index + (match[1]?.length ?? 0);
-      const length = (match[2] ?? match[0]).length;
-      const start = spanAt(offset).start;
-      const end = spanAt(offset + length - 1).end;
-      replacements.push({ start, end, replacement, priority: priority + 2 });
-    }
-  }
-  for (const { start, end } of userinfoSpans(shadow)) {
-    replacements.push({ start: spanAt(start).start, end: spanAt(end - 1).end, replacement: "[credential]", priority: 1 });
-  }
-  for (const { start, end } of emailSpans(shadow)) {
-    replacements.push({ start: spanAt(start).start, end: spanAt(end - 1).end, replacement: "[email]", priority: 6 });
-  }
-  replacements.sort((left, right) => left.start - right.start || left.priority - right.priority || right.end - left.end);
-  let result = "";
-  let cursor = 0;
-  for (const { start, end, replacement } of replacements) {
-    if (start < cursor)
-      continue;
-    result += value.slice(cursor, start) + replacement;
-    cursor = end;
-  }
-  return result + value.slice(cursor);
-}
-function removeRelativePathQueries(value) {
-  return value.replace(/[^\s)]+/gu, (token) => token.split("#").map((part) => {
-    const slash = part.indexOf("/");
-    if (slash < 0)
-      return part;
-    const query = part.indexOf("?", slash + 1);
-    return query > slash + 1 ? part.slice(0, query) : part;
-  }).join("#"));
-}
-function redactSensitiveText(value) {
-  if (value.length > MAX_INSPECTION_LENGTH)
-    return "[redacted]";
-  return removeRelativePathQueries(redactEncodedIdentifiers(value).replace(/\b(?:phc|phx|phs|pha|phr)_[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/giu, "Bearer [credential]").replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, "[credential]").replace(/(https?:\/\/[^\s?#)]+)(?:\?[^\s#)]*)?(?:#[^\s)]*)?/giu, "$1").replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|auth(?:orization)?|secret|password|code|state)=([^\s&]+)/giu, "$1=[redacted]"));
+// src/attribution.ts
+var CAMPAIGNS = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"];
+var REFS = ["ref", "via"];
+var CLICK_IDS = ["gclid", "fbclid", "msclkid"];
+var TRACKING = [...REFS, ...CAMPAIGNS, ...CLICK_IDS];
+function refLabel(value) {
+  const label = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return /^[a-z0-9._-]{1,40}$/u.test(label) ? label : undefined;
 }
 
-// src/site.ts
-var MAX_PATH_LENGTH = 512;
-var MAX_SLUG_LENGTH = 160;
-function normalizeAnalyticsHostname(hostname) {
-  return hostname.trim().toLowerCase().replace(/\.$/, "").replace(/:\d+$/, "");
+// src/events.ts
+var SCHEMA = 2;
+var MARKETING_EVENTS = [
+  "cta clicked",
+  "outbound link opened",
+  "demo played",
+  "download started",
+  "install command copied",
+  "store link opened",
+  "download link emailed",
+  "download link failed",
+  "analytics choice made"
+];
+var LIFECYCLE_EVENTS = [
+  "app installed",
+  "app opened",
+  "cli command run",
+  "mcp tool called",
+  "account created",
+  "signed in",
+  "activated",
+  "upgrade offered",
+  "checkout started"
+];
+var SERVER_EVENTS = [
+  "download served",
+  "checkout completed",
+  "subscription started",
+  "subscription renewed",
+  "subscription canceled",
+  "payment failed",
+  "refund issued",
+  "checkout session created"
+];
+var SHARED_EVENTS = [...MARKETING_EVENTS, ...LIFECYCLE_EVENTS, ...SERVER_EVENTS];
+
+// src/internal.ts
+var bag = (value) => typeof value === "object" && value !== null && !Array.isArray(value) ? value : undefined;
+var count = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+var encoder = new TextEncoder;
+var hexOf = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+async function sha256Hex(value) {
+  return hexOf(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value))));
 }
-function normalizeAnalyticsPathname(pathname) {
-  const withoutQuery = pathname.split(/[?#]/u, 1)[0] ?? "/";
-  const withLeadingSlash = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
-  const collapsed = withLeadingSlash.replace(/\/{2,}/gu, "/");
-  const withoutTrailingSlash = collapsed.length > 1 ? collapsed.replace(/\/$/u, "") : collapsed;
-  return withoutTrailingSlash.slice(0, MAX_PATH_LENGTH) || "/";
+async function hmacHex(secret, value) {
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return hexOf(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value))));
 }
-function isAllowedAnalyticsHost(site, hostname) {
-  const normalized = normalizeAnalyticsHostname(hostname);
-  return site.allowedHosts.some((candidate) => normalizeAnalyticsHostname(candidate) === normalized);
+var NAMESPACE = Uint8Array.from([107, 167, 184, 17, 157, 173, 17, 209, 128, 180, 0, 192, 79, 212, 48, 200]);
+async function uuidV5(name) {
+  const text = encoder.encode(name);
+  const input = new Uint8Array(NAMESPACE.length + text.length);
+  input.set(NAMESPACE);
+  input.set(text, NAMESPACE.length);
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-1", input)).slice(0, 16);
+  bytes[6] = (bytes[6] ?? 0) & 15 | 80;
+  bytes[8] = (bytes[8] ?? 0) & 63 | 128;
+  const hex = hexOf(bytes);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
-function parseAnalyticsLocation(site, value) {
-  if (typeof value === "object" && !(value instanceof URL)) {
-    if (!isAllowedAnalyticsHost(site, value.hostname)) {
-      return null;
+var ZERO_DECIMAL = new Set(["bif", "clp", "djf", "gnf", "jpy", "kmf", "krw", "mga", "pyg", "rwf", "vnd", "vuv", "xaf", "xof", "xpf"]);
+var THREE_DECIMAL = new Set(["bhd", "jod", "kwd", "omr", "tnd"]);
+function decimalsOf(currency) {
+  return ZERO_DECIMAL.has(currency) ? 0 : THREE_DECIMAL.has(currency) ? 3 : 2;
+}
+var UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu;
+function later(waitUntil, timeoutMs, work) {
+  const job = (async () => {
+    const controller = new AbortController;
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+    try {
+      await work(controller.signal);
+    } catch {} finally {
+      clearTimeout(timer);
     }
-    return {
-      hostname: normalizeAnalyticsHostname(value.hostname),
-      pathname: normalizeAnalyticsPathname(value.pathname)
-    };
-  }
+  })();
   try {
-    const parsed = value instanceof URL ? value : new URL(value, `https://${site.canonicalDomain}`);
-    if (!isAllowedAnalyticsHost(site, parsed.hostname)) {
-      return null;
-    }
-    return {
-      hostname: normalizeAnalyticsHostname(parsed.hostname),
-      pathname: normalizeAnalyticsPathname(parsed.pathname)
-    };
-  } catch {
-    return null;
-  }
+    waitUntil?.(job);
+  } catch {}
+  return job;
 }
-function ruleMatches(rule, pathname) {
-  const rulePath = normalizeAnalyticsPathname(rule.path);
-  if (rule.match === "exact") {
-    return pathname === rulePath;
-  }
-  return rulePath === "/" || pathname === rulePath || pathname.startsWith(`${rulePath}/`);
-}
-function policyPathname(pathname) {
-  try {
-    return normalizeAnalyticsPathname(decodeURIComponent(normalizeAnalyticsPathname(pathname)));
-  } catch {
-    return null;
-  }
-}
-function isAllowedAnalyticsPath(site, pathname) {
-  const normalized = policyPathname(pathname);
-  if (normalized === null)
-    return false;
-  return !site.excludedPaths?.some((rule) => ruleMatches(rule, normalized)) && (site.allowedPaths === undefined || site.allowedPaths.some((rule) => ruleMatches(rule, normalized)));
-}
-function slugForRule(rule, pathname) {
-  if (!rule.captureSlug) {
+
+// src/policy.ts
+var REGION_TABLE = {
+  eu: { analytics: "cookieless", autocapture: false, replay: false, ads: false, ask: "all" },
+  uk_ch: { analytics: "persistent", autocapture: true, replay: false, ads: false, ask: "ads" },
+  br: { analytics: "persistent", autocapture: true, replay: false, ads: false, ask: "ads" },
+  us: { analytics: "persistent", autocapture: true, replay: true, ads: true, ask: "none" },
+  row: { analytics: "persistent", autocapture: true, replay: true, ads: true, ask: "none" }
+};
+var EU_COUNTRIES = [
+  "AT",
+  "BE",
+  "BG",
+  "CY",
+  "CZ",
+  "DE",
+  "DK",
+  "EE",
+  "ES",
+  "FI",
+  "FR",
+  "GR",
+  "HR",
+  "HU",
+  "IE",
+  "IT",
+  "LT",
+  "LU",
+  "LV",
+  "MT",
+  "NL",
+  "PL",
+  "PT",
+  "RO",
+  "SE",
+  "SI",
+  "SK",
+  "IS",
+  "LI",
+  "NO",
+  "AX",
+  "GF",
+  "GP",
+  "MQ",
+  "RE",
+  "YT",
+  "MF",
+  "GG",
+  "JE",
+  "IM",
+  "GI"
+];
+var UK_CH_COUNTRIES = ["GB", "CH"];
+var BR_COUNTRIES = ["BR"];
+var US_COUNTRIES = ["US", "PR", "GU", "VI", "AS", "MP", "UM"];
+var PLACELESS_ZONE = /^(?:UTC|UCT|GMT|GMT0|GMT[+-]0|Greenwich|Universal|Zulu|Factory|Etc\/.*)$/u;
+var UK_CH_ZONE = /^(?:Europe\/(?:London|Belfast|Zurich)|GB|GB-Eire)$/u;
+var EU_ZONE = /^(?:Europe\/.*|Arctic\/.*|Atlantic\/(?:Reykjavik|Canary|Madeira|Azores|Faroe|Faeroe|Jan_Mayen)|Asia\/(?:Nicosia|Famagusta)|Africa\/Ceuta|Indian\/(?:Reunion|Mayotte)|America\/(?:Guadeloupe|Martinique|Cayenne|Marigot|St_Barthelemy)|Eire|Iceland|Portugal|Poland|CET|MET|EET|WET)$/u;
+var BR_ZONE = /^(?:America\/(?:Sao_Paulo|Rio_Branco|Manaus|Cuiaba|Campo_Grande|Belem|Fortaleza|Recife|Araguaina|Maceio|Bahia|Santarem|Porto_Velho|Boa_Vista|Eirunepe|Noronha|Porto_Acre)|Brazil\/.*)$/u;
+var US_ZONE = /^(?:America\/(?:New_York|Chicago|Denver|Los_Angeles|Phoenix|Anchorage|Juneau|Sitka|Metlakatla|Yakutat|Nome|Adak|Boise|Detroit|Menominee|Indiana\/.*|Kentucky\/.*|North_Dakota\/.*|Indianapolis|Louisville|Puerto_Rico|St_Thomas)|Pacific\/(?:Honolulu|Guam|Saipan|Pago_Pago|Midway|Wake)|US\/.*|EST|MST|HST|EST5EDT|CST6CDT|MST7MDT|PST8PDT|Navajo)$/u;
+var EU_SET = new Set(EU_COUNTRIES);
+var UK_CH_SET = new Set(UK_CH_COUNTRIES);
+var BR_SET = new Set(BR_COUNTRIES);
+var US_SET = new Set(US_COUNTRIES);
+function countryCode(value) {
+  if (typeof value !== "string")
     return;
-  }
-  const rulePath = normalizeAnalyticsPathname(rule.path);
-  const relative = pathname.slice(rulePath.length).replace(/^\/+|\/+$/gu, "");
-  return relative ? relative.slice(0, MAX_SLUG_LENGTH) : undefined;
+  const code = value.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/u.test(code) || code === "XX" || code === "ZZ")
+    return;
+  return code;
 }
-function classifyAnalyticsRoute(site, location) {
-  const parsed = parseAnalyticsLocation(site, location);
-  if (!parsed || !isAllowedAnalyticsPath(site, parsed.pathname)) {
-    return null;
+function groupOfCountry(code) {
+  if (EU_SET.has(code))
+    return "eu";
+  if (UK_CH_SET.has(code))
+    return "uk_ch";
+  if (BR_SET.has(code))
+    return "br";
+  if (US_SET.has(code))
+    return "us";
+  return "row";
+}
+function groupOfZone(zone) {
+  if (typeof zone !== "string")
+    return "eu";
+  const name = zone.trim();
+  if (name === "" || PLACELESS_ZONE.test(name))
+    return "eu";
+  if (UK_CH_ZONE.test(name))
+    return "uk_ch";
+  if (EU_ZONE.test(name))
+    return "eu";
+  if (BR_ZONE.test(name))
+    return "br";
+  if (US_ZONE.test(name))
+    return "us";
+  return "row";
+}
+function regionGroup(input) {
+  const code = countryCode(input.country);
+  return code === undefined ? groupOfZone(input.zone) : groupOfCountry(code);
+}
+function regionPolicy(input) {
+  const group = regionGroup(input);
+  const rule = REGION_TABLE[group];
+  const analyticsChoice = input.choices?.analytics;
+  const adsChoice = input.choices?.ads;
+  const gpc = input.gpc === true;
+  let analytics = rule.analytics;
+  let autocapture = rule.autocapture;
+  let replay = rule.replay;
+  let ads = rule.ads;
+  let ask = rule.ask;
+  if (group === "eu") {
+    const yes = analyticsChoice === "yes" || analyticsChoice === undefined && adsChoice === "yes";
+    if (yes) {
+      analytics = "persistent";
+      autocapture = true;
+      replay = adsChoice !== "no";
+      ads = adsChoice !== "no";
+    }
+    if (analyticsChoice !== undefined || adsChoice !== undefined)
+      ask = "none";
+  } else {
+    if (adsChoice === "yes") {
+      replay = true;
+      ads = true;
+    } else if (adsChoice === "no") {
+      replay = false;
+      ads = false;
+    }
+    if (adsChoice !== undefined || analyticsChoice !== undefined)
+      ask = "none";
   }
-  const rule = site.routes.find((candidate) => ruleMatches(candidate, parsed.pathname));
-  const rawPathname = typeof location === "object" && !(location instanceof URL) ? location.pathname : (location instanceof URL ? location : new URL(location, `https://${site.canonicalDomain}`)).pathname;
-  const emittedPath = normalizeAnalyticsPathname(redactSensitiveText(rawPathname));
-  const contentSlug = rule ? slugForRule(rule, emittedPath) : undefined;
+  if (analyticsChoice === "no") {
+    analytics = "cookieless";
+    autocapture = false;
+    replay = false;
+    ads = false;
+    ask = "none";
+  }
+  if (gpc) {
+    replay = false;
+    ads = false;
+    if (ask === "ads")
+      ask = "none";
+  }
+  return { region_group: group, analytics, autocapture, replay, ads, ask };
+}
+function regionResponse(input) {
+  const country = countryCode(input.country) ?? null;
+  const gpc = input.gpc === true;
+  return { country, region_group: regionGroup(input), gpc, policy: regionPolicy({ country, zone: input.zone, gpc }) };
+}
+
+// src/server.ts
+var COUNTRY_HEADERS = ["cf-ipcountry", "x-vercel-ip-country", "cloudfront-viewer-country", "x-country-code"];
+var headersOf = (source) => ("headers" in source) ? source.headers : source;
+function regionOf(source, zone) {
+  const headers = headersOf(source);
+  const country = COUNTRY_HEADERS.map((name) => headers.get(name)).find((value) => typeof value === "string" && value !== "") ?? null;
+  return regionResponse({ country, zone, gpc: headers.get("sec-gpc") === "1" });
+}
+function regionHandler(request) {
+  let zone;
+  try {
+    const tz = new URL(request.url).searchParams.get("tz");
+    zone = tz !== null && /^[A-Za-z0-9_+/-]{1,64}$/u.test(tz) ? tz : undefined;
+  } catch {
+    zone = undefined;
+  }
+  return new Response(JSON.stringify(regionOf(request, zone)), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store", vary: "*" }
+  });
+}
+function regionScript(region) {
+  return `window.__hranessRegion=${JSON.stringify(region).replace(/</gu, "\\u003c")};`;
+}
+var CAPTURE_PATH = "/i/v0/e/";
+async function captureBody(config, input) {
+  const namespace = config.namespace ?? config.siteId;
+  const key = input.key ?? crypto.randomUUID();
+  const uuid = await uuidV5(`${namespace}\x00${key}`);
+  const person = input.person === true;
   return {
-    analytics_schema_version: site.schemaVersion,
-    site_id: site.id,
-    canonical_domain: normalizeAnalyticsHostname(site.canonicalDomain),
-    canonical_path: redactSensitiveText(rule === undefined && site.unknownCanonicalPath !== undefined ? normalizeAnalyticsPathname(redactSensitiveText(site.unknownCanonicalPath)) : emittedPath),
-    page_kind: rule?.pageKind ?? "other",
-    ...rule?.contentGroup ? { content_group: rule.contentGroup } : {},
-    ...contentSlug ? { content_slug: redactSensitiveText(contentSlug) } : {}
+    api_key: config.token,
+    uuid,
+    event: input.event,
+    distinct_id: input.distinctId,
+    timestamp: new Date((input.at ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
+    properties: {
+      ...input.props,
+      site_id: config.siteId,
+      surface: input.surface ?? "server",
+      schema: SCHEMA,
+      $process_person_profile: person,
+      $geoip_disable: true,
+      $ip: null,
+      $insert_id: uuid,
+      ...person && input.setOnce !== undefined ? { $set_once: input.setOnce } : {},
+      ...person && input.set !== undefined ? { $set: input.set } : {}
+    }
   };
 }
-function canonicalAnalyticsUrl(site, pathname) {
-  return `https://${normalizeAnalyticsHostname(site.canonicalDomain)}${normalizeAnalyticsPathname(redactSensitiveText(pathname))}`;
-}
-function isAllowedCustomEvent(site, eventName) {
-  return site.customEvents.includes(eventName);
-}
-function isSensitiveAnalyticsPath(site, pathname) {
-  const normalized = policyPathname(pathname);
-  if (normalized === null)
-    return true;
-  return site.sensitivePaths?.some((rule) => ruleMatches(rule, normalized)) ?? false;
-}
-
-// src/event.ts
-var MAX_PROPERTY_COUNT = 32;
-var MAX_PROPERTY_KEY_LENGTH = 64;
-var MAX_PROPERTY_STRING_LENGTH = 256;
-var MAX_PROPERTY_ARRAY_LENGTH = 20;
-var MAX_ERROR_MESSAGE_LENGTH = 512;
-var MAX_ERROR_STACK_LENGTH = 6000;
-var MAX_PROVIDER_PROPERTY_STRING_LENGTH = 2048;
-var CURRENT_URL_KEYS = new Set([
-  "$current_url",
-  "$initial_current_url",
-  "$session_entry_url",
-  "current_url",
-  "url",
-  "href",
-  "url.full"
-]);
-var ANALYTICS_ATTRIBUTION_PARAMETERS = [
-  "utm_source",
-  "utm_medium",
-  "utm_campaign",
-  "utm_term",
-  "utm_content",
-  "utm_id",
-  "gclid",
-  "gbraid",
-  "wbraid",
-  "gad_source",
-  "fbclid",
-  "msclkid",
-  "ttclid",
-  "twclid",
-  "li_fat_id",
-  "igshid",
-  "dclid",
-  "epik",
-  "rdt_cid",
-  "sccid",
-  "irclid",
-  "mc_cid"
-];
-var ATTRIBUTION_PARAMETER_NAMES = new Set(ANALYTICS_ATTRIBUTION_PARAMETERS);
-var DROPPED_CAMPAIGN_PROPERTY_NAMES = new Set([
-  "_kx",
-  "campaign_params",
-  "gclsrc",
-  "ph_keyword",
-  "qclid",
-  "ref"
-]);
-var PERSONAL_DATA_PROPERTY_NAMES = new Set([
-  "code",
-  "email",
-  "key",
-  "password",
-  "secret",
-  "token",
-  "state",
-  "access_token",
-  "refresh_token",
-  "id_token",
-  "session_token",
-  "api_key",
-  "authorization"
-]);
-var PASSTHROUGH_PROPERTY_NAMES = new Set([
-  "$cookieless_mode",
-  "$device_id",
-  "$insert_id",
-  "$lib",
-  "$lib_version",
-  "$pageview_id",
-  "$prev_pageview_id",
-  "$raw_user_agent",
-  "$session_id",
-  "$window_id",
-  "distinct_id"
-]);
-var REFERRER_URL_KEYS = new Set([
-  "$referrer",
-  "$initial_referrer",
-  "$session_entry_referrer",
-  "referrer"
-]);
-var DIRECT_REFERRER = "$direct";
-function normalizedProviderPropertyName(key) {
-  return key.toLowerCase().replace(/^\$/u, "").replace(/^(?:initial|session_entry)_/u, "");
-}
-function isProviderPathnameKey(key) {
-  return /^(?:\$)?(?:(?:initial|session_entry|prev_pageview)_)?pathname$/u.test(key.toLowerCase());
-}
-function isAnalyticsAttributionProperty(key) {
-  return ATTRIBUTION_PARAMETER_NAMES.has(normalizedProviderPropertyName(key));
-}
-function isDroppedCampaignProperty(key) {
-  return DROPPED_CAMPAIGN_PROPERTY_NAMES.has(normalizedProviderPropertyName(key));
-}
-function isPersonalDataProperty(key) {
-  return PERSONAL_DATA_PROPERTY_NAMES.has(normalizedProviderPropertyName(key).replace(/-/gu, "_"));
-}
-function cleanPropertyString(value) {
-  return Array.from(value, (character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint < 32 || codePoint === 127 ? " " : character;
-  }).join("").replace(/\s{2,}/gu, " ").trim().slice(0, MAX_PROPERTY_STRING_LENGTH);
-}
-function normalizePrimitive(value) {
-  if (value === null || typeof value === "boolean") {
-    return value;
+function capture(config, input, waitUntil) {
+  if (config.token === undefined || config.token === "") {
+    if (input instanceof Promise)
+      input.catch(() => {
+        return;
+      });
+    return Promise.resolve();
   }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
+  const send = config.fetch ?? fetch;
+  return later(waitUntil, config.timeoutMs ?? 3000, async (signal) => {
+    const event = await (typeof input === "function" ? input() : input);
+    if (event === undefined)
+      return;
+    await send(`${(config.host ?? "https://us.i.posthog.com").replace(/\/$/u, "")}${CAPTURE_PATH}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(await captureBody(config, event)),
+      signal
+    });
+  });
+}
+async function accountDistinctId(secret, account) {
+  if (secret.length < 16)
+    throw new Error("accountDistinctId needs a secret of at least 16 characters");
+  return `acct_${(await hmacHex(secret, `account\x00${account}`)).slice(0, 40)}`;
+}
+function money(amount, currency) {
+  if (typeof currency !== "string" || !/^[a-z]{3}$/iu.test(currency))
+    return {};
+  const code = currency.toLowerCase();
+  const minor = count(amount);
+  return { currency: code, ...minor === undefined ? {} : { amount: minor / 10 ** decimalsOf(code) } };
+}
+var plainId = (value) => typeof value === "string" && value.length > 0 && value.length <= 255 ? value : undefined;
+var id = (value) => plainId(value) ?? plainId(bag(value)?.id);
+var interval = (value) => value === "day" || value === "week" || value === "month" || value === "year" ? value : undefined;
+function recurring(object) {
+  const items = bag(object.items)?.data;
+  const first = Array.isArray(items) ? bag(items[0]) : undefined;
+  const price = bag(first?.price) ?? bag(object.plan);
+  return interval(bag(price?.recurring)?.interval ?? price?.interval);
+}
+var invoiceSubscription = (invoice) => id(invoice.subscription) ?? id(bag(bag(invoice.parent)?.subscription_details)?.subscription);
+var invoiceMetadata = (invoice) => bag(bag(bag(invoice.parent)?.subscription_details)?.metadata) ?? bag(bag(invoice.subscription_details)?.metadata);
+var metadataProps = (metadata) => {
+  const ref = refLabel(metadata?.first_ref);
+  const source = typeof metadata?.first_source === "string" && /^[a-z0-9._-]{1,60}$/u.test(metadata.first_source) ? metadata.first_source : undefined;
+  const plan = typeof metadata?.plan === "string" && /^[a-z0-9._-]{1,40}$/u.test(metadata.plan) ? metadata.plan : undefined;
+  const platform = typeof metadata?.platform === "string" && /^(mac|windows|linux|ios|web)$/u.test(metadata.platform) ? metadata.platform : undefined;
+  return { first_ref: ref, first_source: source, plan, platform };
+};
+async function billingEvent(stripe, options) {
+  const input = bag(stripe);
+  const object = bag(bag(input?.data)?.object);
+  const eventId = id(input?.id);
+  const at = count(input?.created);
+  if (input === undefined || object === undefined || eventId === undefined || at === undefined || typeof input.livemode !== "boolean")
+    return;
+  const type = input.type;
+  const previous = bag(bag(input.data)?.previous_attributes);
+  const base = { store: "stripe", livemode: input.livemode };
+  let metadata = bag(object.metadata);
+  if (type === "checkout.session.completed" || type === "checkout.session.async_payment_succeeded") {
+    if (object.payment_status !== "paid" && object.payment_status !== "no_payment_required")
+      return;
+    if (options.accept && !options.accept(object))
+      return;
+    const subscription = object.mode === "subscription";
+    const external = subscription ? id(object.subscription) : id(object.payment_intent) ?? id(object.id);
+    if (external === undefined)
+      return;
+    const account = await options.resolve({ kind: subscription ? "subscription" : "payment", id: external });
+    if (account === undefined)
+      return;
+    const event = subscription ? "subscription started" : "checkout completed";
+    return {
+      event,
+      key: `${event}:${external}`,
+      at,
+      account,
+      props: { ...base, ...metadataProps(metadata), ...money(object.amount_total, object.currency), ...subscription ? { interval: interval(metadata?.interval) ?? "month" } : {} }
+    };
   }
-  if (typeof value === "string") {
-    return cleanPropertyString(redactSensitiveText(value));
+  if (type === "invoice.paid" || type === "invoice.payment_failed") {
+    const subscription = invoiceSubscription(object);
+    if (subscription === undefined)
+      return;
+    const account = await options.resolve({ kind: "subscription", id: subscription });
+    if (account === undefined)
+      return;
+    metadata = invoiceMetadata(object) ?? metadata;
+    const lines = bag(object.lines)?.data;
+    const every = Array.isArray(lines) ? interval(bag(bag(bag(lines[0])?.price)?.recurring)?.interval ?? bag(bag(bag(lines[0])?.pricing)?.price_details)?.interval) : undefined;
+    if (type === "invoice.paid") {
+      const invoice = id(object.id);
+      if (object.billing_reason !== "subscription_cycle" || invoice === undefined)
+        return;
+      return {
+        event: "subscription renewed",
+        key: `subscription renewed:${invoice}`,
+        at: count(bag(object.status_transitions)?.paid_at) ?? at,
+        account,
+        props: { ...base, ...metadataProps(metadata), interval: every, ...money(object.amount_paid, object.currency) }
+      };
+    }
+    return { event: "payment failed", key: eventId, at, account, props: { ...base, ...metadataProps(metadata), interval: every, ...money(object.amount_due, object.currency) } };
+  }
+  if (type === "customer.subscription.updated" || type === "customer.subscription.deleted") {
+    const cancelAt = count(object.cancel_at);
+    const scheduled = object.cancel_at_period_end === true || cancelAt !== undefined && cancelAt > at;
+    const changed = previous !== undefined && (object.cancel_at_period_end === true && previous.cancel_at_period_end === false || cancelAt !== undefined && Object.hasOwn(previous, "cancel_at") && previous.cancel_at !== cancelAt);
+    if (type !== "customer.subscription.deleted" && !(scheduled && changed))
+      return;
+    const subscription = id(object.id);
+    if (subscription === undefined)
+      return;
+    const account = await options.resolve({ kind: "subscription", id: subscription });
+    if (account === undefined)
+      return;
+    const items = bag(object.items)?.data;
+    const ends = [object.current_period_end, ...Array.isArray(items) ? items.map((item) => bag(item)?.current_period_end) : []].map(count);
+    const atPeriodEnd = object.cancel_at_period_end === true || cancelAt !== undefined && ends.includes(cancelAt);
+    const time = count(object.canceled_at) ?? at;
+    return {
+      event: "subscription canceled",
+      key: `subscription canceled:${subscription}:${String(time)}`,
+      at: time,
+      account,
+      props: { ...base, ...metadataProps(metadata), interval: recurring(object), at_period_end: atPeriodEnd }
+    };
+  }
+  if (type === "charge.refunded") {
+    let account;
+    const payment = id(object.payment_intent);
+    if (payment !== undefined)
+      account = await options.resolve({ kind: "payment", id: payment });
+    if (account === undefined) {
+      const invoice = bag(object.invoice) ?? await options.invoiceOf?.(object);
+      const subscription = invoice === undefined ? undefined : invoiceSubscription(invoice);
+      if (subscription !== undefined)
+        account = await options.resolve({ kind: "subscription", id: subscription });
+      if (invoice !== undefined)
+        metadata = invoiceMetadata(invoice) ?? metadata;
+    }
+    if (account === undefined)
+      return;
+    const total = count(object.amount_refunded);
+    const before = count(previous?.amount_refunded);
+    const refunds = bag(object.refunds)?.data;
+    const amount = total !== undefined && before !== undefined && total >= before ? total - before : Array.isArray(refunds) && refunds.length === 1 ? count(bag(refunds[0])?.amount) : total;
+    return { event: "refund issued", key: eventId, at, account, props: { ...base, ...metadataProps(metadata), ...money(amount, object.currency), full: object.refunded === true } };
   }
   return;
 }
-function normalizePropertyValue(value) {
-  const primitive = normalizePrimitive(value);
-  if (primitive !== undefined) {
-    return primitive;
-  }
-  if (!Array.isArray(value)) {
+function captureBilling(config, stripe, options, waitUntil) {
+  return capture(config, async () => {
+    const mapped = await billingEvent(stripe, options);
+    if (mapped === undefined)
+      return;
+    return { event: mapped.event, key: mapped.key, at: mapped.at, distinctId: await accountDistinctId(config.secret, mapped.account), props: mapped.props, person: true };
+  }, waitUntil);
+}
+function checkoutMetadata(input) {
+  const out = {};
+  const ref = refLabel(input.firstRef);
+  if (ref !== undefined)
+    out["metadata[first_ref]"] = ref;
+  if (typeof input.firstSource === "string" && /^[a-z0-9._-]{1,60}$/u.test(input.firstSource))
+    out["metadata[first_source]"] = input.firstSource;
+  if (input.plan !== undefined && /^[a-z0-9._-]{1,40}$/u.test(input.plan))
+    out["metadata[plan]"] = input.plan;
+  if (input.platform !== undefined && /^(mac|windows|linux|ios|web)$/u.test(input.platform))
+    out["metadata[platform]"] = input.platform;
+  if (interval(input.interval) !== undefined)
+    out["metadata[interval]"] = input.interval ?? "";
+  return out;
+}
+var WIRE_FIELDS = new Set(["v", "event", "install", "id", "at", "app", "build", "os", "region", "props"]);
+var label = (value) => /^[a-z0-9._-]{1,40}$/u.test(value);
+var PLATFORMS = ["mac", "windows", "linux", "ios", "web"];
+var COMMON_PROPS = {
+  region_group: Object.keys(REGION_TABLE),
+  surface: ["mac", "ios", "cli", "mcp", "extension", "web_app"],
+  platform: PLATFORMS,
+  ci: ["true", "false"]
+};
+var LIFECYCLE_WIRE = {
+  "app installed": { channel: ["direct", "app_store", "npm", "brew"], ref: (value) => refLabel(value) === value, visit: (value) => UUID.test(value) },
+  "app opened": { days_since_install_bucket: ["0", "1", "2-6", "7-29", "30+"] },
+  "cli command run": { command: label, ok: ["true", "false"], duration_bucket: ["<1s", "1-5s", "5-30s", "30s+"] },
+  "mcp tool called": { tool: label, client: ["claude", "cursor", "codex", "other"], ok: ["true", "false"] }
+};
+var allows = (rule, value) => rule === undefined ? false : typeof rule === "function" ? rule(value) : rule.includes(value);
+function parseWireEvent(value, events = {}, now = Math.floor(Date.now() / 1000)) {
+  const input = bag(value);
+  if (input === undefined || input.v !== 1 || Object.keys(input).some((key) => !WIRE_FIELDS.has(key)))
     return;
-  }
-  const normalized = value.slice(0, MAX_PROPERTY_ARRAY_LENGTH).map(normalizePrimitive).filter((item) => item !== undefined);
-  return normalized;
-}
-function normalizeAnalyticsProperties(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  const normalized = {};
-  for (const [key, propertyValue] of Object.entries(value).slice(0, MAX_PROPERTY_COUNT)) {
-    if (!/^[a-z][a-z0-9_]*$/u.test(key) || key.length > MAX_PROPERTY_KEY_LENGTH) {
-      continue;
-    }
-    const safeValue = normalizePropertyValue(propertyValue);
-    if (safeValue !== undefined) {
-      normalized[key] = safeValue;
-    }
-  }
-  return normalized;
-}
-function sanitizeThirdPartyUrl(value, originOnly) {
-  try {
-    const parsed = new URL(value);
-    return originOnly ? parsed.origin : `${parsed.origin}${normalizeAnalyticsPathname(parsed.pathname)}`;
-  } catch {
-    return "";
-  }
-}
-function attributionValue(value) {
-  return cleanPropertyString(redactSensitiveText(value));
-}
-function analyticsAttributionQuery(site, url) {
-  if (site.privacyMode === "minimal" || site.attributionMode === "referrer_only" || isSensitiveAnalyticsPath(site, url.pathname)) {
-    return "";
-  }
-  const kept = new URLSearchParams;
-  for (const name of ANALYTICS_ATTRIBUTION_PARAMETERS) {
-    const value = url.searchParams.get(name);
-    if (value) {
-      const safe = attributionValue(value);
-      if (safe)
-        kept.set(name, safe);
-    }
-  }
-  const query = kept.toString();
-  return query ? `?${query}` : "";
-}
-function ownedCanonicalUrl(site, parsed) {
-  const route = classifyAnalyticsRoute(site, parsed);
-  return redactSensitiveText(canonicalAnalyticsUrl(site, route?.canonical_path ?? "/"));
-}
-function sanitizeUrlValue(site, key, value, stripAttribution) {
-  if (REFERRER_URL_KEYS.has(key)) {
-    if (site.privacyMode === "minimal") {
-      return { handled: true, value: redactSensitiveText(sanitizeThirdPartyUrl(value, true)) };
-    }
-    if (value === DIRECT_REFERRER) {
-      return { handled: true, value };
-    }
-    try {
-      const parsed = new URL(value);
-      if (isAllowedAnalyticsHost(site, parsed.hostname)) {
-        return { handled: true, value: ownedCanonicalUrl(site, parsed) };
-      }
-      return { handled: true, value: redactSensitiveText(sanitizeThirdPartyUrl(parsed.href, true)) };
-    } catch {
-      return { handled: true, value: "" };
-    }
-  }
-  if (isProviderPathnameKey(key)) {
-    try {
-      const parsed = new URL(value, `https://${site.canonicalDomain}`);
-      if (!isAllowedAnalyticsHost(site, parsed.hostname))
-        return { handled: true, value: "" };
-      return {
-        handled: true,
-        value: redactSensitiveText(classifyAnalyticsRoute(site, parsed)?.canonical_path ?? "/")
-      };
-    } catch {
-      return { handled: true, value: "" };
-    }
-  }
-  if (!CURRENT_URL_KEYS.has(key)) {
-    return { handled: false };
-  }
-  try {
-    const parsed = new URL(value, `https://${site.canonicalDomain}`);
-    if (!isAllowedAnalyticsHost(site, parsed.hostname)) {
-      return { handled: true, value: redactSensitiveText(sanitizeThirdPartyUrl(parsed.href, true)) };
-    }
-    return {
-      handled: true,
-      value: `${ownedCanonicalUrl(site, parsed)}${stripAttribution ? "" : analyticsAttributionQuery(site, parsed)}`
-    };
-  } catch {
-    return { handled: true, value: "" };
-  }
-}
-function sanitizeProviderValue(context, key, value, depth) {
-  const { site } = context;
-  if (isDroppedCampaignProperty(key)) {
+  const name = input.event;
+  if (typeof name !== "string")
     return;
-  }
-  if (isAnalyticsAttributionProperty(key)) {
-    if (context.sensitive || typeof value !== "string") {
+  const allowed = Object.hasOwn(events, name) ? events[name] : Object.hasOwn(LIFECYCLE_WIRE, name) ? LIFECYCLE_WIRE[name] : undefined;
+  if (allowed === undefined)
+    return;
+  if (typeof input.install !== "string" || !UUID.test(input.install) || typeof input.id !== "string" || !UUID.test(input.id))
+    return;
+  if (typeof input.app !== "string" || !/^\d{1,4}(\.\d{1,4}){0,3}$/u.test(input.app))
+    return;
+  if (typeof input.build !== "number" || !Number.isSafeInteger(input.build) || input.build < 0 || input.build > 1e7)
+    return;
+  if (typeof input.os !== "string" || !/^\d{1,3}\.\d{1,3}$/u.test(input.os))
+    return;
+  if (input.region !== "ask" && input.region !== "default")
+    return;
+  const raw = input.props ?? {};
+  const bagged = bag(raw);
+  if (bagged === undefined)
+    return;
+  const props = {};
+  for (const [key, item] of Object.entries(bagged)) {
+    if (typeof item !== "string")
+      return;
+    const rule = Object.hasOwn(allowed, key) ? allowed[key] : COMMON_PROPS[key];
+    if (!allows(rule, item)) {
+      if (key === "client" && rule !== undefined)
+        continue;
       return;
     }
-    const safe = attributionValue(value);
-    return safe || undefined;
+    props[key] = item;
   }
-  if (site.privacyMode !== "minimal" && PASSTHROUGH_PROPERTY_NAMES.has(key)) {
-    if (typeof value === "string") {
-      return value.slice(0, MAX_PROVIDER_PROPERTY_STRING_LENGTH);
-    }
-    return typeof value === "boolean" || typeof value === "number" ? value : undefined;
-  }
-  if (isPersonalDataProperty(key) && value !== null && value !== undefined) {
-    return typeof value === "boolean" ? value : "[redacted]";
-  }
-  if (typeof value === "string") {
-    const url = sanitizeUrlValue(site, key, value, context.sensitive);
-    return (url.handled ? url.value : redactSensitiveText(value)).slice(0, MAX_PROVIDER_PROPERTY_STRING_LENGTH);
-  }
-  if (value === null || typeof value === "boolean" || typeof value === "number") {
-    return value;
-  }
-  if (depth >= 5 || !value || typeof value !== "object") {
-    return;
-  }
-  if (context.seen.has(value)) {
-    return;
-  }
-  context.seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeProviderValue(context, key, item, depth + 1));
-  }
-  const result = {};
-  for (const [nestedKey, nestedValue] of Object.entries(value)) {
-    const safeValue = sanitizeProviderValue(context, nestedKey, nestedValue, depth + 1);
-    if (safeValue !== undefined) {
-      result[nestedKey] = safeValue;
-    }
-  }
-  return result;
+  const at = typeof input.at === "number" && Number.isSafeInteger(input.at) && input.at > now - 30 * 86400 && input.at < now + 600 ? input.at : now;
+  return { event: name, install: input.install.toLowerCase(), id: input.id.toLowerCase(), at, app: input.app, build: input.build, os: input.os, region: input.region, props };
 }
-function isSensitiveProviderLocation(site, currentUrl) {
-  if (typeof currentUrl !== "string") {
-    return false;
-  }
-  try {
-    return isSensitiveAnalyticsPath(site, new URL(currentUrl, `https://${site.canonicalDomain}`).pathname);
-  } catch {
-    return false;
-  }
+async function installDistinctId(config, install) {
+  return `${config.siteId}:install:${(await sha256Hex(`${config.namespace ?? config.siteId}\x00install\x00${install}`)).slice(0, 40)}`;
 }
-function sanitizeProviderProperties(site, properties, currentUrl = properties["$current_url"], stripAttribution = false) {
-  const context = {
-    site,
-    sensitive: site.privacyMode === "minimal" || site.attributionMode === "referrer_only" || stripAttribution || isSensitiveProviderLocation(site, currentUrl),
-    seen: new WeakSet
-  };
-  const sanitized = {};
-  for (const [key, value] of Object.entries(properties)) {
-    const safeValue = sanitizeProviderValue(context, key, value, 0);
-    if (safeValue !== undefined) {
-      sanitized[key] = safeValue;
-    }
-  }
-  return sanitized;
-}
-function sanitizeAnalyticsError(value) {
-  try {
-    if (!(value instanceof Error)) {
-      return new Error("Non-Error rejection");
-    }
-    const name = redactSensitiveText(value.name || "Error").slice(0, 80) || "Error";
-    const message = redactSensitiveText(value.message || "Unknown error").slice(0, MAX_ERROR_MESSAGE_LENGTH);
-    const sanitized = new Error(message);
-    sanitized.name = name;
-    if (value.stack) {
-      sanitized.stack = redactSensitiveText(value.stack).slice(0, MAX_ERROR_STACK_LENGTH);
-    }
-    return sanitized;
-  } catch {
-    return new Error("Uninspectable rejection");
-  }
-}
-function analyticsErrorFingerprint(error) {
-  const stackFrame = error.stack?.split(`
-`).slice(1, 3).join(`
-`) ?? "";
-  const input = `${error.name}
-${error.message}
-${stackFrame}`;
-  let hash = 2166136261;
-  for (let index = 0;index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `e_${(hash >>> 0).toString(16).padStart(8, "0")}`;
-}
-
-class ExceptionBudget {
-  #totalLimit;
-  #perFingerprintLimit;
-  #windowMs;
-  #all = [];
-  #byFingerprint = new Map;
-  constructor(options) {
-    this.#totalLimit = options.totalLimit;
-    this.#perFingerprintLimit = options.perFingerprintLimit;
-    this.#windowMs = options.windowMs;
-  }
-  get activeFingerprintCount() {
-    return this.#byFingerprint.size;
-  }
-  allow(fingerprint, now = Date.now()) {
-    const threshold = now - this.#windowMs;
-    this.#all = this.#all.filter((timestamp) => timestamp > threshold);
-    for (const [candidate, timestamps] of this.#byFingerprint) {
-      const active = timestamps.filter((timestamp) => timestamp > threshold);
-      if (active.length === 0) {
-        this.#byFingerprint.delete(candidate);
-      } else if (active.length !== timestamps.length) {
-        this.#byFingerprint.set(candidate, active);
-      }
-    }
-    const matching = this.#byFingerprint.get(fingerprint) ?? [];
-    if (this.#all.length >= this.#totalLimit || matching.length >= this.#perFingerprintLimit) {
-      return false;
-    }
-    this.#all.push(now);
-    matching.push(now);
-    this.#byFingerprint.set(fingerprint, matching);
-    return true;
-  }
-}
-
-// src/traffic.ts
-var AI_SOURCES = [
-  ["chatgpt", ["chatgpt.com", "chat.openai.com"]],
-  ["perplexity", ["perplexity.ai"]],
-  ["claude", ["claude.ai"]],
-  ["gemini", ["gemini.google.com"]],
-  ["copilot", ["copilot.microsoft.com"]],
-  ["poe", ["poe.com"]],
-  ["you.com", ["you.com"]],
-  ["meta_ai", ["meta.ai"]]
-];
-var SEARCH_SOURCES = [
-  ["google", ["google.com", "google.co.uk", "google.ca", "google.com.au"]],
-  ["bing", ["bing.com"]],
-  ["duckduckgo", ["duckduckgo.com"]],
-  ["yahoo", ["search.yahoo.com", "yahoo.com"]],
-  ["brave", ["search.brave.com"]],
-  ["ecosia", ["ecosia.org"]],
-  ["baidu", ["baidu.com"]],
-  ["yandex", ["yandex.com", "yandex.ru"]]
-];
-var SOCIAL_SOURCES = [
-  ["reddit", ["reddit.com"]],
-  ["x", ["x.com", "twitter.com", "t.co"]],
-  ["linkedin", ["linkedin.com"]],
-  ["facebook", ["facebook.com", "fb.com"]],
-  ["instagram", ["instagram.com"]],
-  ["youtube", ["youtube.com", "youtu.be"]],
-  ["mastodon", ["mastodon.social"]],
-  ["threads", ["threads.net"]]
-];
-function hostnameMatches(hostname, domain) {
-  return hostname === domain || hostname.endsWith(`.${domain}`);
-}
-function sourceForHostname(hostname, sources) {
-  for (const [source, domains] of sources) {
-    if (domains.some((domain) => hostnameMatches(hostname, domain))) {
-      return source;
-    }
-  }
-  return null;
-}
-function sourceForAttribution(value, sources) {
-  const normalized = value.trim().toLowerCase().replace(/^www\./u, "");
-  if (!normalized) {
-    return null;
-  }
-  for (const [source, domains] of sources) {
-    if (normalized === source || domains.some((domain) => hostnameMatches(normalized, domain))) {
-      return source;
-    }
-  }
-  return null;
-}
-function parseAttributionSource(site, currentUrl) {
-  if (!currentUrl || site.attributionMode === "referrer_only") {
-    return null;
-  }
-  try {
-    const url = new URL(currentUrl, `https://${site.canonicalDomain}`);
-    if (isSensitiveAnalyticsPath(site, url.pathname) || !isAllowedAnalyticsPath(site, url.pathname))
-      return null;
-    return url.searchParams.get("utm_source");
-  } catch {
-    return null;
-  }
-}
-function parseReferrerHostname(referrer) {
-  if (!referrer || referrer === "$direct") {
-    return null;
-  }
-  try {
-    return normalizeAnalyticsHostname(new URL(referrer).hostname);
-  } catch {
-    return "";
-  }
-}
-function classifyAnalyticsTraffic(site, referrer, currentUrl) {
-  const attributionSource = parseAttributionSource(site, currentUrl);
-  if (attributionSource) {
-    const attributedAiSource = sourceForAttribution(attributionSource, AI_SOURCES);
-    if (attributedAiSource) {
-      return {
-        traffic_channel: "ai_referral",
-        traffic_source: attributedAiSource
-      };
-    }
-    const attributedSearchSource = sourceForAttribution(attributionSource, SEARCH_SOURCES);
-    if (attributedSearchSource) {
-      return {
-        traffic_channel: "organic_search",
-        traffic_source: attributedSearchSource
-      };
-    }
-    const attributedSocialSource = sourceForAttribution(attributionSource, SOCIAL_SOURCES);
-    if (attributedSocialSource) {
-      return {
-        traffic_channel: "social",
-        traffic_source: attributedSocialSource
-      };
-    }
-  }
-  const hostname = parseReferrerHostname(referrer);
-  if (hostname === null) {
-    return { traffic_channel: "direct", traffic_source: "direct" };
-  }
-  if (!hostname) {
-    return { traffic_channel: "referral", traffic_source: "unknown" };
-  }
-  if (isAllowedAnalyticsHost(site, hostname)) {
-    return {
-      traffic_channel: "internal",
-      traffic_source: "internal",
-      referrer_host: hostname
-    };
-  }
-  const publicHostname = hostname.replace(/^www\./u, "");
-  const aiSource = sourceForHostname(publicHostname, AI_SOURCES);
-  if (aiSource) {
-    return {
-      traffic_channel: "ai_referral",
-      traffic_source: aiSource,
-      referrer_host: publicHostname
-    };
-  }
-  const searchSource = sourceForHostname(publicHostname, SEARCH_SOURCES);
-  if (searchSource) {
-    return {
-      traffic_channel: "organic_search",
-      traffic_source: searchSource,
-      referrer_host: publicHostname
-    };
-  }
-  const socialSource = sourceForHostname(publicHostname, SOCIAL_SOURCES);
-  if (socialSource) {
-    return {
-      traffic_channel: "social",
-      traffic_source: socialSource,
-      referrer_host: publicHostname
-    };
-  }
+async function wireCapture(config, event, once = new Set(["app installed"])) {
+  const { surface, ...props } = event.props;
   return {
-    traffic_channel: "referral",
-    traffic_source: publicHostname,
-    referrer_host: publicHostname
+    event: event.event,
+    distinctId: await installDistinctId(config, event.install),
+    key: once.has(event.event) ? `app\x00${event.event}\x00${event.install}` : `app\x00${event.event}\x00${event.install}\x00${event.id}`,
+    at: event.at,
+    surface: surface ?? "mac",
+    props: {
+      ...Object.fromEntries(Object.entries(props).map(([key, value]) => [key, value === "true" ? true : value === "false" ? false : value])),
+      identity_scope: "install",
+      app_version: event.app,
+      app_build: event.build,
+      os_version: event.os,
+      consent_region: event.region
+    }
   };
 }
-
-// src/server.ts
-var DEFAULT_API_HOST = "https://us.i.posthog.com";
-var serverExceptionBudget = new ExceptionBudget({
-  totalLimit: 30,
-  perFingerprintLimit: 3,
-  windowMs: 60000
-});
-var clients = new Map;
-function firstHeader(headers, name) {
-  const value = headers[name];
-  return Array.isArray(value) ? value[0] : value;
-}
-function requestHostname(headers) {
-  return normalizeAnalyticsHostname(firstHeader(headers, "x-forwarded-host") ?? firstHeader(headers, "host") ?? "");
-}
-function serverClient(options) {
-  if (!options.apiKey?.startsWith("phc_")) {
-    return null;
+var WIRE_LIMIT = 16384;
+async function readCapped(request, limit) {
+  if (request.body === null)
+    return "";
+  const reader = request.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;; ) {
+    const { done, value } = await reader.read();
+    if (done)
+      break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => {
+        return;
+      });
+      return;
+    }
+    chunks.push(value);
   }
-  const key = `${options.site.id}:${options.apiKey}:${options.apiHost ?? DEFAULT_API_HOST}`;
-  const existing = clients.get(key);
-  if (existing) {
-    return existing;
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
   }
-  const client = new PostHog(options.apiKey, {
-    host: options.apiHost ?? DEFAULT_API_HOST,
-    flushAt: 1,
-    flushInterval: 0,
-    maxQueueSize: 100,
-    disableGeoip: true,
-    privacyMode: true,
-    enableExceptionAutocapture: false
-  });
-  clients.set(key, client);
-  return client;
+  return new TextDecoder().decode(bytes);
 }
-function createPostHogRequestErrorReporter(options) {
-  return async (value, request, context) => {
-    const production = options.production ?? process.env.VERCEL_ENV === "production";
-    const hostname = requestHostname(request.headers);
-    if (!production || !isAllowedAnalyticsHost(options.site, hostname)) {
-      return;
-    }
-    const client = serverClient(options);
-    if (!client) {
-      return;
-    }
-    const error = sanitizeAnalyticsError(value);
-    const fingerprint = analyticsErrorFingerprint(error);
-    if (!serverExceptionBudget.allow(fingerprint)) {
-      return;
-    }
-    const route = classifyAnalyticsRoute(options.site, {
-      hostname,
-      pathname: request.path
-    });
-    if (!route) {
-      return;
-    }
-    const traffic = classifyAnalyticsTraffic(options.site, firstHeader(request.headers, "referer"));
-    const properties = sanitizeProviderProperties(options.site, {
-      ...route,
-      ...traffic,
-      error_fingerprint: fingerprint,
-      error_surface: "server",
-      error_origin: "next_request_error",
-      request_method: request.method.slice(0, 12).toUpperCase(),
-      route_type: context.routeType,
-      router_kind: context.routerKind,
-      framework_route: context.routePath,
-      $process_person_profile: false
-    });
-    try {
-      await client.captureExceptionImmediate(error, `server:${options.site.id}`, properties);
-    } catch {}
-  };
-}
-async function capturePostHogEvent(options, input) {
-  const production = options.production ?? process.env.VERCEL_ENV === "production";
-  if (!production || !isAllowedAnalyticsHost(options.site, input.hostname) || !isAllowedCustomEvent(options.site, input.event)) {
-    return false;
-  }
-  const route = classifyAnalyticsRoute(options.site, {
-    hostname: input.hostname,
-    pathname: input.pathname ?? "/"
-  });
-  if (!route)
-    return false;
+async function wireHandler(config, request, events = {}, waitUntil) {
+  const empty = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+  if (request.method !== "POST")
+    return new Response(null, { status: 405, headers: { allow: "POST" } });
+  const length = Number(request.headers.get("content-length") ?? "0");
+  if (length > WIRE_LIMIT)
+    return new Response(null, { status: 413 });
+  let body;
   try {
-    const client = serverClient(options);
-    if (!client)
-      return false;
-    await client.captureImmediate({
-      distinctId: `server:${options.site.id}`,
-      event: input.event,
-      properties: {
-        ...sanitizeProviderProperties(options.site, normalizeAnalyticsProperties(input.properties), `https://${normalizeAnalyticsHostname(input.hostname)}${input.pathname ?? "/"}`),
-        ...route,
-        $process_person_profile: false
-      },
-      disableGeoip: true
-    });
-    return true;
+    const text = await readCapped(request, WIRE_LIMIT);
+    if (text === undefined)
+      return new Response(null, { status: 413 });
+    body = JSON.parse(text);
   } catch {
-    return false;
+    return new Response(null, { status: 400 });
   }
+  const list = Array.isArray(body) ? body.slice(0, 20) : [body];
+  const parsed = list.map((item) => parseWireEvent(item, events)).filter((item) => item !== undefined);
+  if (parsed.length === 0)
+    return new Response(null, { status: 400 });
+  for (const event of parsed)
+    capture(config, () => wireCapture(config, event), waitUntil);
+  return empty();
+}
+function downloadServed(config, input, waitUntil) {
+  const ref = refLabel(input.ref);
+  const visit = typeof input.visit === "string" && UUID.test(input.visit) ? input.visit.toLowerCase() : undefined;
+  const version = input.version !== undefined && /^[0-9A-Za-z.+-]{1,40}$/u.test(input.version) ? input.version : undefined;
+  return capture(config, {
+    event: "download served",
+    distinctId: visit ?? `download:${crypto.randomUUID()}`,
+    props: { platform: input.platform, artifact: input.artifact, version, ref }
+  }, waitUntil);
+}
+async function deletePerson(config, distinctId) {
+  const send = config.fetch ?? fetch;
+  const host = (config.host ?? "https://us.posthog.com").replace(/\/$/u, "");
+  const headers = { authorization: `Bearer ${config.personalApiKey}` };
+  const base = `${host}/api/projects/${encodeURIComponent(String(config.projectId))}/persons`;
+  const found = await send(`${base}/?distinct_id=${encodeURIComponent(distinctId)}`, { headers });
+  if (!found.ok)
+    return false;
+  const results = bag(await found.json())?.results;
+  const people = Array.isArray(results) ? results.map((item) => id(bag(item)?.uuid)).filter((item) => item !== undefined) : [];
+  for (const person of people) {
+    const removed = await send(`${base}/${encodeURIComponent(person)}/?delete_events=true`, { method: "DELETE", headers });
+    if (!removed.ok && removed.status !== 404)
+      return false;
+  }
+  return true;
 }
 export {
-  createPostHogRequestErrorReporter,
-  capturePostHogEvent
+  wireHandler,
+  wireCapture,
+  regionScript,
+  regionOf,
+  regionHandler,
+  parseWireEvent,
+  money,
+  installDistinctId,
+  downloadServed,
+  deletePerson,
+  checkoutMetadata,
+  captureBody,
+  captureBilling,
+  capture,
+  billingEvent,
+  accountDistinctId,
+  WIRE_FIELDS,
+  SERVER_EVENTS,
+  LIFECYCLE_WIRE,
+  COUNTRY_HEADERS,
+  COMMON_PROPS,
+  CAPTURE_PATH
 };
 
-//# debugId=3DC25CF7B18DABB964756E2164756E21
+//# debugId=1099E6682204E94764756E2164756E21
