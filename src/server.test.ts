@@ -18,7 +18,7 @@ import {
   wireCapture,
   wireHandler,
   type BillingRef,
-} from "./server.ts";
+} from "./server.js";
 
 const config = { token: "public-token", siteId: "example" } as const;
 const recorder = () => {

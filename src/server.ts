@@ -3,10 +3,10 @@
  * joins billing to the signed-in person, Stripe billing events, the app and CLI wire format, served downloads and
  * erasure. Nothing here reads a request body it was not handed, logs, or sends an email address.
  */
-import { refLabel } from "./attribution.ts";
-import { SCHEMA, SERVER_EVENTS, type Props, type ServerEvent } from "./events.ts";
-import { bag, count, decimalsOf, hmacHex, later, sha256Hex, UUID, uuidV5, type Bag } from "./internal.ts";
-import { REGION_TABLE, regionResponse, type RegionGroup, type RegionResponse } from "./policy.ts";
+import { refLabel } from "./attribution.js";
+import { SCHEMA, SERVER_EVENTS, type Props, type ServerEvent } from "./events.js";
+import { bag, count, decimalsOf, hmacHex, later, sha256Hex, UUID, uuidV5, type Bag } from "./internal.js";
+import { REGION_TABLE, regionResponse, type RegionGroup, type RegionResponse } from "./policy.js";
 
 export { SERVER_EVENTS, type ServerEvent };
 

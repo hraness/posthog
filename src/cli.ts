@@ -8,9 +8,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir, release } from "node:os";
 import { dirname, join } from "node:path";
 
-import { durationBucket, type DurationBucket } from "./events.ts";
-import { UUID } from "./internal.ts";
-import { groupOfZone, telemetryDefault, type RegionGroup } from "./policy.ts";
+import { durationBucket, type DurationBucket } from "./events.js";
+import { UUID } from "./internal.js";
+import { groupOfZone, telemetryDefault, type RegionGroup } from "./policy.js";
 
 export type TelemetryConfig = Readonly<{
   /** The product's site ID, for the config directory default. */

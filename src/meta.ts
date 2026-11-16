@@ -4,8 +4,8 @@
  * product names, only from an address with nothing private in it. The Conversions API helpers build the server's
  * copy of a browser event with the same event ID, so Meta counts it once, and hash an email the way Meta expects.
  */
-import { bag, count, decimalsOf, later, sha256Hex, UUID, type Bag } from "./internal.ts";
-import type { RegionPolicy } from "./policy.ts";
+import { bag, count, decimalsOf, later, sha256Hex, UUID, type Bag } from "./internal.js";
+import type { RegionPolicy } from "./policy.js";
 
 export const SCRIPT = "https://connect.facebook.net/en_US/fbevents.js";
 export const GRAPH = "https://graph.facebook.com/v26.0";

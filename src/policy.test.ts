@@ -14,7 +14,7 @@ import {
   telemetryDefault,
   type Choices,
   type RegionGroup,
-} from "./policy.ts";
+} from "./policy.js";
 
 const GROUPS: readonly RegionGroup[] = ["eu", "uk_ch", "br", "us", "row"];
 

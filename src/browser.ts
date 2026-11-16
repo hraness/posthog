@@ -16,7 +16,7 @@ import {
   withoutTracking,
   type Arrival,
   type FirstTouch,
-} from "./attribution.ts";
+} from "./attribution.js";
 import {
   accountId,
   capabilities,
@@ -32,11 +32,11 @@ import {
   visitId,
   type BrowserConfig,
   type ConsentWords,
-} from "./browser-config.ts";
-import { MILESTONES, SCHEMA, type EventName, type Props, type PropsOf } from "./events.ts";
-import { GROUP_COUNTRY, parseRegionResponse, regionPolicy, type Choices, type RegionPolicy } from "./policy.ts";
+} from "./browser-config.js";
+import { MILESTONES, SCHEMA, type EventName, type Props, type PropsOf } from "./events.js";
+import { GROUP_COUNTRY, parseRegionResponse, regionPolicy, type Choices, type RegionPolicy } from "./policy.js";
 
-export * from "./browser-config.ts";
+export * from "./browser-config.js";
 export {
   afterFirstPageview,
   arrivalOf,
@@ -49,7 +49,7 @@ export {
   refOf,
   withoutTracking,
   type Channel,
-} from "./attribution.ts";
+} from "./attribution.js";
 
 type PostHogLike = {
   init(token: string, options: Record<string, unknown>): unknown;

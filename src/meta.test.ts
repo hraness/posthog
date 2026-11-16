@@ -18,8 +18,8 @@ import {
   startPixel,
   trackForServer,
   type Page,
-} from "./meta.ts";
-import { policyForGroup } from "./policy.ts";
+} from "./meta.js";
+import { policyForGroup } from "./policy.js";
 
 const PIXEL = "1234567890";
 

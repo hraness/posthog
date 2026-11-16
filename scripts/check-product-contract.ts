@@ -1,11 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import {
-  classifyAnalyticsRoute,
-  POSTHOG_SCHEMA_VERSION,
-  type PostHogSiteDefinition,
-} from "../src/site.js";
+import { REGION_TABLE, type RegionGroup } from "../src/policy.js";
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -48,7 +44,9 @@ const inventory = record(JSON.parse(inventoryBytes) as unknown, "portfolio-inven
 const packageName = stringField(packageManifest, "name", "package.json");
 const packageVersion = stringField(packageManifest, "version", "package.json");
 const packageDescription = stringField(packageManifest, "description", "package.json");
-for (const fact of ["PostHog", "Next.js"]) {
+const repositorySlug = stringField(inventory, "repository", "portfolio-inventory.json");
+const tarballStem = packageName.replace(/^@/u, "").replace("/", "-");
+for (const fact of ["PostHog", "Meta", "CLI"]) {
   if (!packageDescription.includes(fact)) {
     throw new Error(`package.json description must name ${fact}`);
   }
@@ -60,11 +58,14 @@ const localReferences = [
   "CONTRIBUTING.md",
   "LICENSE",
   "SECURITY.md",
-  "src/client.ts",
-  "src/event.ts",
-  "src/next-config.ts",
+  "Package.swift",
+  "src/attribution.ts",
+  "src/browser.ts",
+  "src/cli.ts",
+  "src/events.ts",
+  "src/meta.ts",
+  "src/policy.ts",
   "src/server.ts",
-  "src/site.ts",
 ] as const;
 for (const localReference of localReferences) {
   requireText(readme, `(${localReference})`, "README.md");
@@ -76,7 +77,7 @@ await Promise.all(
 );
 requireText(
   readme,
-  `https://github.com/hraness/posthog/releases/download/v${packageVersion}/hraness-posthog-${packageVersion}.tgz`,
+  `https://github.com/${repositorySlug}/releases/download/v${packageVersion}/${tarballStem}-${packageVersion}.tgz`,
   "README.md",
 );
 requireText(readme, "does not publish the package to npm", "README.md");
@@ -84,31 +85,19 @@ if (readme.includes("—")) {
   throw new Error("README.md must not contain em dashes");
 }
 
-const proofSite = {
-  id: "docs",
-  canonicalDomain: "docs.example.com",
-  allowedHosts: ["docs.example.com"],
-  schemaVersion: POSTHOG_SCHEMA_VERSION,
-  routes: [
-    { match: "exact", path: "/", pageKind: "home" },
-    {
-      match: "prefix",
-      path: "/guides",
-      pageKind: "guide",
-      contentGroup: "documentation",
-      captureSlug: true,
-    },
-  ],
-  customEvents: ["guide opened"],
-  delegatedEvents: ["guide opened"],
-  sensitivePaths: [{ match: "prefix", path: "/account" }],
-  unknownCanonicalPath: "/not-found",
-} satisfies PostHogSiteDefinition;
-const proofOutput = classifyAnalyticsRoute(
-  proofSite,
-  "https://docs.example.com/guides/install?token=private#step",
-);
-requireText(readme, JSON.stringify(proofOutput, null, 2), "README.md route proof");
+// The README's region table is the policy table, row for row.
+const LABELS: Readonly<Record<RegionGroup, string>> = {
+  eu: "EU, EEA and unknown",
+  uk_ch: "UK and Switzerland",
+  br: "Brazil",
+  us: "United States",
+  row: "Rest of the world",
+};
+const yesNo = (value: boolean) => (value ? "on" : "off");
+for (const [group, rule] of Object.entries(REGION_TABLE) as [RegionGroup, (typeof REGION_TABLE)[RegionGroup]][]) {
+  const row = `| ${LABELS[group]} | ${rule.analytics} | ${yesNo(rule.autocapture)} | ${yesNo(rule.replay)} | ${yesNo(rule.ads)} | ${rule.ask} |`;
+  requireText(readme, row, "README.md region table");
+}
 
 const exportsRecord = record(packageManifest.exports, "package.json exports");
 for (const exportPath of Object.keys(exportsRecord)) {
@@ -132,7 +121,7 @@ requireText(releaseWorkflow, 'gh release create "$GITHUB_REF_NAME"', "release wo
 requireText(releaseWorkflow, ".isImmutable", "release workflow");
 for (const required of [
   "bun pm pack --ignore-scripts --filename",
-  "hraness-posthog-${GITHUB_REF_NAME#v}.tgz",
+  `${tarballStem}-\${GITHUB_REF_NAME#v}.tgz`,
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
   "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
   "sha256sum --check SHA256SUMS",

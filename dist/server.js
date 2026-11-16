@@ -324,7 +324,8 @@ function money(amount, currency) {
   const minor = count(amount);
   return { currency: code, ...minor === undefined ? {} : { amount: minor / 10 ** decimalsOf(code) } };
 }
-var id = (value) => typeof value === "string" && value.length > 0 && value.length <= 255 ? value : id(bag(value)?.id);
+var plainId = (value) => typeof value === "string" && value.length > 0 && value.length <= 255 ? value : undefined;
+var id = (value) => plainId(value) ?? plainId(bag(value)?.id);
 var interval = (value) => value === "day" || value === "week" || value === "month" || value === "year" ? value : undefined;
 function recurring(object) {
   const items = bag(object.items)?.data;
@@ -617,4 +618,4 @@ export {
   CAPTURE_PATH
 };
 
-//# debugId=AF0A7454A5B6C4B464756E2164756E21
+//# debugId=927AA1C860AB12AE64756E2164756E21

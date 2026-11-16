@@ -19,7 +19,7 @@ import {
   remember,
   routePattern,
   withoutTracking,
-} from "./attribution.ts";
+} from "./attribution.js";
 
 const own = { ownHosts: ["example.com"] };
 

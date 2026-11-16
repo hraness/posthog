@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createTelemetry, noticeText, wireOs, wireVersion, type TelemetryConfig } from "./cli.ts";
-import { parseWireEvent } from "./server.ts";
+import { createTelemetry, noticeText, wireOs, wireVersion, type TelemetryConfig } from "./cli.js";
+import { parseWireEvent } from "./server.js";
 
 const dirs: string[] = [];
 afterEach(async () => {

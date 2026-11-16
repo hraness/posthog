@@ -3,8 +3,8 @@
  * policy produce, and the parsers for what the browser stores. No browser or provider import, so it is unit-tested
  * directly.
  */
-import type { CleanOptions, ChannelOptions, RoutePattern } from "./attribution.ts";
-import type { Choice, Choices, RegionPolicy } from "./policy.ts";
+import type { CleanOptions, ChannelOptions, RoutePattern } from "./attribution.js";
+import type { Choice, Choices, RegionPolicy } from "./policy.js";
 
 /** Which surface a page belongs to (section 3.3 of the standard). */
 export type Preset = "marketing" | "docs" | "app";

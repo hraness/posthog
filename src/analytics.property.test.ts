@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import * as fc from "fast-check";
 
-import { campaignLabel, channelOf, cleanProps, cleanUrl, parseFirstTouch, refLabel, withoutTracking } from "./attribution.ts";
-import { parseChoices, formatChoices, mergeChoices } from "./browser-config.ts";
-import { regionPolicy, type Choice } from "./policy.ts";
-import { parseWireEvent } from "./server.ts";
+import { campaignLabel, channelOf, cleanProps, cleanUrl, parseFirstTouch, refLabel, withoutTracking } from "./attribution.js";
+import { parseChoices, formatChoices, mergeChoices } from "./browser-config.js";
+import { regionPolicy, type Choice } from "./policy.js";
+import { parseWireEvent } from "./server.js";
 
 const choice = fc.constantFrom<Choice | undefined>("yes", "no", undefined);
 const input = fc.record({

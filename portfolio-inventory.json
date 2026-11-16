@@ -5,10 +5,10 @@
   "components": [
     {
       "kind": "package",
-      "name": "@hraness/posthog",
+      "name": "@hraness/analytics",
       "path": ".",
       "visibility": "public",
-      "version": "0.3.12"
+      "version": "1.0.0"
     }
   ],
   "dependencies": [],
@@ -16,8 +16,8 @@
   "brands": [],
   "publications": [
     {
-      "component": "@hraness/posthog",
-      "packageName": "@hraness/posthog",
+      "component": "@hraness/analytics",
+      "packageName": "@hraness/analytics",
       "repository": "hraness/posthog"
     }
   ]

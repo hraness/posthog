@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { daysBucket, durationBucket, isEventName, MILESTONES, SHARED_EVENTS, type PropsOf } from "./events.ts";
+import { daysBucket, durationBucket, isEventName, MILESTONES, SHARED_EVENTS, type PropsOf } from "./events.js";
 
 test("every shared event follows the naming rule and appears once", () => {
   for (const name of SHARED_EVENTS) expect(isEventName(name)).toBe(true);

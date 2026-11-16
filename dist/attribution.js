@@ -107,7 +107,7 @@ function withoutTracking(href) {
       changed = true;
     }
   }
-  return changed ? url.pathname + url.search + url.hash : null;
+  return changed ? url.pathname.replace(/^\/{2,}/u, "/") + url.search + url.hash : null;
 }
 function carryRef(href, ref, here, skipPrefixes = ["/downloads/"]) {
   if (ref === undefined || refLabel(ref) !== ref)
@@ -418,4 +418,4 @@ export {
   CAMPAIGNS
 };
 
-//# debugId=4FD13A406743F11664756E2164756E21
+//# debugId=073FFBAF2DA3E84664756E2164756E21

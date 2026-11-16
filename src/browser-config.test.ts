@@ -14,8 +14,8 @@ import {
   visitId,
   type BrowserConfig,
   type Preset,
-} from "./browser-config.ts";
-import { policyForGroup, type RegionGroup } from "./policy.ts";
+} from "./browser-config.js";
+import { policyForGroup, type RegionGroup } from "./policy.js";
 
 const config = (preset: Preset): BrowserConfig => ({ token: "public-token", hosts: ["example.com"], siteId: "example", preset });
 const options = (preset: Preset, group: RegionGroup, privatePath = false, gpc = false) => {
