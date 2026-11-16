@@ -434,10 +434,93 @@ async function readCapped(request: Request, limit: number): Promise<string | und
   return new TextDecoder().decode(bytes);
 }
 
-/** `POST /api/app/event` or `/api/cli/event`: parse, capture after the response, and answer 204 either way. */
-export async function wireHandler(config: ServerConfig, request: Request, events: WireEvents = {}, waitUntil?: (job: Promise<unknown>) => void): Promise<Response> {
+// --- Rate limits ------------------------------------------------------------------------------------------------
+
+/** A fixed-window counter per key, held in this process's memory. */
+export type RateLimit = Readonly<{
+  /** Counts one use of `key` and says whether it is within the limit. */
+  take(key: string, now?: number): boolean;
+  /** Seconds until `key`'s window resets (at least 1). */
+  retryAfter(key: string, now?: number): number;
+}>;
+
+export type RateLimitOptions = Readonly<{
+  /** Uses allowed per key in each window. Default 60. */
+  limit?: number;
+  /** The window in milliseconds. Default 60 000 (one minute). */
+  windowMs?: number;
+  /** Keys tracked at once; the oldest window is forgotten past this, so memory stays bounded. Default 10 000. */
+  maxKeys?: number;
+}>;
+
+const whole = (value: number | undefined, fallback: number, min: number, max: number) =>
+  typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback;
+
+/**
+ * A rate limit for the wire endpoints: `limit` uses per key per `windowMs`, at most `maxKeys` keys in memory. It is
+ * per process (one Worker isolate, one Node server), so it caps a single noisy client, not a distributed flood.
+ */
+export function rateLimit(options: RateLimitOptions = {}): RateLimit {
+  const limit = whole(options.limit, 60, 1, 1_000_000);
+  const windowMs = whole(options.windowMs, 60_000, 1000, 86_400_000);
+  const maxKeys = whole(options.maxKeys, 10_000, 1, 1_000_000);
+  const windows = new Map<string, { start: number; used: number }>();
+  const current = (key: string, now: number) => {
+    const found = windows.get(key);
+    if (found !== undefined && now >= found.start && now - found.start < windowMs) return found;
+    windows.delete(key);
+    if (windows.size >= maxKeys) {
+      // Maps keep insertion order: the first key is the oldest window.
+      const oldest = windows.keys().next();
+      if (oldest.done !== true) windows.delete(oldest.value);
+    }
+    const made = { start: now, used: 0 };
+    windows.set(key, made);
+    return made;
+  };
+  return {
+    take(key, now = Date.now()) {
+      const slot = current(key, now);
+      if (slot.used >= limit) return false;
+      slot.used += 1;
+      return true;
+    },
+    retryAfter(key, now = Date.now()) {
+      const found = windows.get(key);
+      if (found === undefined) return 1;
+      return Math.max(1, Math.ceil((found.start + windowMs - now) / 1000));
+    },
+  };
+}
+
+/** The client's address from the edge's headers (`cf-connecting-ip`, `x-real-ip`, then the first `x-forwarded-for`). */
+export function clientAddress(source: HeaderSource): string | undefined {
+  const headers = headersOf(source);
+  const forwarded = headers.get("x-forwarded-for")?.split(",", 1)[0];
+  const value = [headers.get("cf-connecting-ip"), headers.get("x-real-ip"), forwarded].map((item) => item?.trim()).find((item) => item !== undefined && item !== "");
+  return value !== undefined && /^[0-9A-Fa-f.:]{2,45}$/u.test(value) ? value : undefined;
+}
+
+export type WireLimits = Readonly<{
+  /** Requests per client address. A request over it is answered 429 before its body is read. */
+  perAddress?: RateLimit;
+  /** Events per install ID. Events over it are dropped; a batch with nothing left is answered 429. */
+  perInstall?: RateLimit;
+}>;
+
+const tooMany = (seconds: number) => new Response(null, { status: 429, headers: { "retry-after": String(seconds), "cache-control": "no-store" } });
+
+/**
+ * `POST /api/app/event` or `/api/cli/event`: parse, capture after the response, and answer 204 either way. `limits`
+ * is off unless passed; the Swift package keeps a 429'd batch for later, and the CLI drops it.
+ */
+export async function wireHandler(config: ServerConfig, request: Request, events: WireEvents = {}, waitUntil?: (job: Promise<unknown>) => void, limits: WireLimits = {}): Promise<Response> {
   const empty = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
+  const address = clientAddress(request);
+  if (limits.perAddress !== undefined && address !== undefined && !limits.perAddress.take(`address\0${address}`)) {
+    return tooMany(limits.perAddress.retryAfter(`address\0${address}`));
+  }
   const length = Number(request.headers.get("content-length") ?? "0");
   if (length > WIRE_LIMIT) return new Response(null, { status: 413 });
   let body: unknown;
@@ -452,18 +535,26 @@ export async function wireHandler(config: ServerConfig, request: Request, events
   // A bad event is dropped on its own; the batch fails only when nothing in it is good.
   const parsed = list.map((item) => parseWireEvent(item, events)).filter((item) => item !== undefined);
   if (parsed.length === 0) return new Response(null, { status: 400 });
-  for (const event of parsed) void capture(config, () => wireCapture(config, event), waitUntil);
+  const perInstall = limits.perInstall;
+  const kept = perInstall === undefined ? parsed : parsed.filter((event) => perInstall.take(`install\0${event.install}`));
+  if (kept.length === 0 && perInstall !== undefined) return tooMany(perInstall.retryAfter(`install\0${parsed[0]?.install ?? ""}`));
+  for (const event of kept) void capture(config, () => wireCapture(config, event), waitUntil);
   return empty();
 }
 
 // --- Downloads and erasure -------------------------------------------------------------------------------------
 
-/** `download served`, from the server that served the file, under an anonymous one-off distinct ID. */
+/**
+ * `download served`, from the server that served the file, under an anonymous one-off distinct ID. With `limit`, a key
+ * (the client's address from `clientAddress`, say) over its rate is not counted; the download itself is never refused.
+ */
 export function downloadServed(
   config: ServerConfig,
   input: Readonly<{ platform: "mac" | "windows" | "linux" | "ios" | "web"; artifact: "zip" | "dmg" | "pkg" | "script"; version?: string; ref?: unknown; visit?: unknown }>,
   waitUntil?: (job: Promise<unknown>) => void,
+  limit?: Readonly<{ rate: RateLimit; key: string | undefined }>,
 ): Promise<void> {
+  if (limit !== undefined && limit.key !== undefined && !limit.rate.take(`download\0${limit.key}`)) return Promise.resolve();
   const ref = refLabel(input.ref);
   const visit = typeof input.visit === "string" && UUID.test(input.visit) ? input.visit.toLowerCase() : undefined;
   const version = input.version !== undefined && /^[0-9A-Za-z.+-]{1,40}$/u.test(input.version) ? input.version : undefined;

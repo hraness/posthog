@@ -140,7 +140,7 @@ function afterFirstPageview(then) {
     then();
   };
 }
-function arrivalOf(path, search, referrer, contentParams = []) {
+function arrivalOf(path, search, referrer, contentParams = [], routes = []) {
   const input = new URLSearchParams(search);
   const kept = new URLSearchParams;
   for (const name of CAMPAIGNS) {
@@ -164,12 +164,47 @@ function arrivalOf(path, search, referrer, contentParams = []) {
       content[name] = value;
   }
   return {
-    path: path.split(/[?#]/u, 1)[0] || "/",
+    path: routePattern(path.split(/[?#]/u, 1)[0] || "/", routes),
     search: kept.toString(),
     referrer: referrerSite(referrer),
     ...fbclid !== null && /^[\w-]{1,400}$/u.test(fbclid) ? { fbclid } : {},
     content
   };
+}
+var ARRIVAL_GLOBAL = "__hranessArrival";
+var ARRIVAL_SCRIPT = `window.${ARRIVAL_GLOBAL}=window.${ARRIVAL_GLOBAL}||{path:location.pathname,search:location.search,referrer:document.referrer};`;
+function parseArrivalSnapshot(value) {
+  if (typeof value !== "object" || value === null)
+    return;
+  const { path, search, referrer } = value;
+  if (typeof path !== "string" || !path.startsWith("/") || path.length > 2048)
+    return;
+  if (typeof search !== "string" || search !== "" && !search.startsWith("?") || search.length > 4096)
+    return;
+  if (typeof referrer !== "string" || referrer.length > 4096)
+    return;
+  return { path, search, referrer };
+}
+function snapshotArrival() {
+  const scope = globalThis;
+  const held = parseArrivalSnapshot(scope[ARRIVAL_GLOBAL]);
+  if (held !== undefined)
+    return held;
+  if (typeof location === "undefined" || typeof document === "undefined")
+    return;
+  let made;
+  try {
+    made = { path: location.pathname, search: location.search, referrer: document.referrer };
+  } catch {
+    return;
+  }
+  const parsed = parseArrivalSnapshot(made);
+  if (parsed === undefined)
+    return;
+  try {
+    scope[ARRIVAL_GLOBAL] = parsed;
+  } catch {}
+  return parsed;
 }
 function clickKind(search, fbclid) {
   const params = new URLSearchParams(search);
@@ -370,6 +405,8 @@ function cleanValue(key, value, options, depth) {
     return refLabel(value);
   const routes = options.routes ?? [];
   if (typeof value === "string") {
+    if (/referrer_host$/iu.test(key))
+      return /^[a-z0-9.-]{1,253}$/u.test(value) ? value : referrerHost(value) || undefined;
     if (/referrer/iu.test(key))
       return value === "$direct" ? value : referrerSite(value);
     if (key === "$elements_chain")
@@ -424,6 +461,7 @@ function cleanProps(props, options = {}) {
 }
 export {
   withoutTracking,
+  snapshotArrival,
   routePattern,
   remember,
   referrerSite,
@@ -431,6 +469,7 @@ export {
   refOf,
   refLabel,
   parseFirstTouch,
+  parseArrivalSnapshot,
   mondayOf,
   matchRoute,
   firstTouchProps,
@@ -449,7 +488,9 @@ export {
   REF_CHANNELS,
   REFS,
   CLICK_IDS,
-  CAMPAIGNS
+  CAMPAIGNS,
+  ARRIVAL_SCRIPT,
+  ARRIVAL_GLOBAL
 };
 
-//# debugId=2F8E7CAD59E07FFB64756E2164756E21
+//# debugId=641C345720EBD54C64756E2164756E21

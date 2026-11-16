@@ -13,11 +13,13 @@ import {
   clickKind,
   firstTouchProps,
   mondayOf,
+  parseArrivalSnapshot,
   parseFirstTouch,
   refLabel,
   refOf,
   remember,
   routePattern,
+  snapshotArrival,
   withoutTracking,
 } from "./attribution.js";
 
@@ -255,6 +257,13 @@ describe("what never leaves", () => {
     expect(sent).toEqual({ via: "dir", first_ref: "hn", $set_once: {} });
   });
 
+  test("a referring host stays a host, and an address in its place is cut to one", () => {
+    expect(cleanProps({ first_referrer_host: "news.ycombinator.com" })).toEqual({ first_referrer_host: "news.ycombinator.com" });
+    expect(cleanProps({ first_referrer_host: "https://www.reddit.com/r/secret?x=1" })).toEqual({ first_referrer_host: "reddit.com" });
+    expect(cleanProps({ first_referrer_host: "person@example.com" })).toEqual({});
+    expect(cleanProps({ $referrer: "https://news.ycombinator.com/item?id=1" })).toEqual({ $referrer: "https://news.ycombinator.com/" });
+  });
+
   test("an allowlist drops the product's unknown properties but keeps PostHog's", () => {
     expect(cleanProps({ $current_url: "/", plan: "pro", prompt: "secret" }, { allowProps: ["plan"] }) as unknown).toEqual({ $current_url: "/", plan: "pro" });
   });
@@ -302,5 +311,24 @@ describe("whole events", () => {
       timestamp: "2026-11-16T00:00:00Z",
       properties: { cta: "hero", $current_url: "https://example.com/" },
     });
+  });
+});
+
+describe("the landing", () => {
+  test("a landing that matches a route is kept as its pattern", () => {
+    expect(arrivalOf("/library/items/abc?x=1", "", "", [], ["/library/items/:id"]).path).toBe("/library/items/:id");
+    expect(arrivalOf("/s/secret#frag", "", "", [], ["/library/*", "/s/:slug"]).path).toBe("/s/:slug");
+    expect(arrivalOf("/pricing", "", "", [], ["/s/:slug"]).path).toBe("/pricing");
+    expect(arrivalOf("/library/items/abc", "", "").path).toBe("/library/items/abc");
+  });
+
+  test("an arrival snapshot is read once, kept, and parsed from unknown", () => {
+    expect(parseArrivalSnapshot({ path: "/a", search: "?utm_source=x", referrer: "" })).toEqual({ path: "/a", search: "?utm_source=x", referrer: "" });
+    expect(parseArrivalSnapshot({ path: "/a", search: "", referrer: "", extra: 1 })).toEqual({ path: "/a", search: "", referrer: "" });
+    for (const bad of [null, "x", { path: "a", search: "", referrer: "" }, { path: "/a", search: "x=1", referrer: "" }, { path: "/a", search: "", referrer: null }, { path: `/${"a".repeat(2048)}`, search: "", referrer: "" }]) {
+      expect(parseArrivalSnapshot(bad)).toBeUndefined();
+    }
+    // Outside a browser there is nothing to read.
+    expect(snapshotArrival()).toBeUndefined();
   });
 });

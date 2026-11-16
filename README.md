@@ -52,7 +52,7 @@ This repository does not publish the package to npm. Pin the immutable GitHub Re
 ```json
 {
   "dependencies": {
-    "@hraness/analytics": "https://github.com/hraness/posthog/releases/download/v1.0.2/hraness-analytics-1.0.2.tgz"
+    "@hraness/analytics": "https://github.com/hraness/posthog/releases/download/v1.0.3/hraness-analytics-1.0.3.tgz"
   }
 }
 ```
@@ -60,10 +60,10 @@ This repository does not publish the package to npm. Pin the immutable GitHub Re
 Each release also carries a `SHA256SUMS` file. The package needs Node 24 or later on the server and pins
 `posthog-js` 1.449.1 for the browser.
 
-For a Mac or iOS app, add the repository as a Swift package from the `v1.0.2` tag:
+For a Mac or iOS app, add the repository as a Swift package from the `v1.0.3` tag:
 
 ```swift
-.package(url: "https://github.com/hraness/posthog.git", from: "1.0.2")
+.package(url: "https://github.com/hraness/posthog.git", from: "1.0.3")
 ```
 
 The Swift package ([`Package.swift`](Package.swift)) depends only on Foundation, plus AppKit for the consent sheet.
@@ -109,6 +109,12 @@ const analytics = createAnalytics<"export completed">({
 analytics.track("cta clicked", { cta: "download", placement: "hero" });
 ```
 
+To load the client later than the page (a dynamic `import()` after the router has started), take the arrival
+snapshot first. Call `snapshotArrival()` from `@hraness/analytics/attribution` in the page's first module, or put
+`ARRIVAL_SCRIPT` in an inline `<head>` script. It keeps the landing path, query and referrer as the page first saw
+them, so a router that rewrites the address before `createAnalytics` runs does not lose the visit's UTMs, `ref` tag
+or referrer.
+
 `createAnalytics` returns a client that does nothing when the token is empty, the host is not listed, or the page
 runs inside a native shell. Its methods:
 
@@ -138,7 +144,7 @@ runs inside a native shell. Its methods:
 | `storagePrefix` | `siteId` | Prefix for the first-party cookie and storage keys. |
 | `regionUrl` | `/api/region` | Where the region comes from. `false` uses the time zone alone. An edge can also inject `window.__hranessRegion`. |
 | `contentParams` | none | Query parameters that change what a page shows, recorded as `first_<name>`. |
-| `landingKind` | none | Maps the landing path to `first_landing_kind`. |
+| `landingKind` | none | Maps the landing path to `first_landing_kind`. It receives the path's route pattern when the path matches `privatePaths` or `clean.routes`. |
 | `channel` | none | Your own hosts and extra `ref` tags for channel grouping. |
 | `privatePaths` | none | Route patterns where replay and heatmaps never run and only allowlisted clicks are captured. |
 | `privateSelector` | `[data-private], .ph-no-capture` | Elements whose text replay masks and whose clicks are dropped. |
@@ -156,7 +162,9 @@ runs inside a native shell. Its methods:
   Referrers are reduced to their origin. Only `utm_*`, `ref` and `via` survive in a URL, as lower-case labels.
 - After the first page view, tracking parameters are removed from the address bar.
 - The first visit is kept as a first-touch record and sent as `first_ref`, `first_source`, `first_channel`,
-  `first_landing` and related properties.
+  `first_landing` and related properties. A landing on a path that matches `privatePaths` or `clean.routes` is
+  kept as its pattern (`/library/items/:id`), never the address itself.
+- A later answer to the banner, a settings toggle or a privacy-page link replaces an earlier one, yes or no.
 - Channels include `ai` (ChatGPT, Claude, Perplexity and others) and `community` (Hacker News, Reddit, Product Hunt,
   Lobsters and `ref` tags you register), alongside search, social, paid, email, referral and direct.
 
@@ -182,9 +190,30 @@ never throws.
 - `captureBilling(config, stripeEvent, { resolve })` turns Stripe webhooks into `checkout completed`,
   `subscription started`, `subscription renewed`, `subscription canceled`, `payment failed` and `refund issued`, with
   the first-touch labels you stored in checkout metadata with `checkoutMetadata`.
-- `wireHandler(config, request, events, waitUntil)` accepts batches from the CLI and the Swift package, rejects any
-  event or property outside the allowlist, and identifies each install by a hash, never the raw install ID.
-- `downloadServed` records a download with its `ref` tag. `deletePerson` erases a person and their events.
+- `wireHandler(config, request, events, waitUntil, limits)` accepts batches from the CLI and the Swift package, rejects
+  any event or property outside the allowlist, and identifies each install by a hash, never the raw install ID.
+- `downloadServed(config, input, waitUntil, limit)` records a download with its `ref` tag. `deletePerson` erases a
+  person and their events.
+
+Rate limits are off unless you pass them. `rateLimit({ limit, windowMs, maxKeys })` counts uses per key in a fixed
+window, by default 60 a minute for each key and at most 10,000 keys in memory. The count lives in one process, such as
+a single Worker isolate, so it stops one noisy client rather than a distributed flood.
+
+```ts
+import { clientAddress, downloadServed, rateLimit, wireHandler } from "@hraness/analytics/server";
+
+const limits = { perAddress: rateLimit({ limit: 120 }), perInstall: rateLimit({ limit: 60 }) };
+export const POST = (request: Request) => wireHandler(config, request, {}, undefined, limits);
+
+const downloads = rateLimit({ limit: 10 });
+void downloadServed(config, { platform: "mac", artifact: "dmg" }, undefined, { rate: downloads, key: clientAddress(request) });
+```
+
+- `perAddress` answers `429` with `Retry-After` once an address passes its limit, before reading the body. The
+  address comes from `cf-connecting-ip`, `x-real-ip` or the first `x-forwarded-for` entry.
+- `perInstall` drops events past an install's limit, and answers `429` when nothing in the batch is left. The Swift
+  package keeps a refused batch and sends it later. The CLI drops it.
+- A download over its key's limit is still served. It just isn't counted.
 
 ## Command-line tools
 

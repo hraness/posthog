@@ -131,13 +131,41 @@ test("property: stored values never throw and never invent answers", () => {
       expect(() => parseFirstTouch(value)).not.toThrow();
       expect(() => parseWireEvent(value)).not.toThrow();
       const parsed = parseChoices(typeof value === "string" ? value : undefined);
-      for (const answer of Object.values(parsed)) expect(["yes", "no", undefined]).toContain(answer);
+      expect(["yes", "no", undefined]).toContain(parsed.analytics);
+      expect(["yes", "no", undefined]).toContain(parsed.ads);
+      expect(parsed.at === undefined || (Number.isSafeInteger(parsed.at) && parsed.at > 0)).toBe(true);
     }),
   );
   fc.assert(fc.property(choice, choice, (analytics, ads) => {
     expect(parseChoices(formatChoices({ analytics, ads }))).toEqual({ analytics, ads });
     expect(mergeChoices({ analytics, ads }, { analytics: "no" }).analytics).toBe("no");
   }));
+});
+
+const dated = fc.record({ analytics: choice, ads: choice, at: fc.option(fc.integer({ min: 1, max: 2 ** 45 }), { nil: undefined }) });
+test("property: the latest dated answer wins per category, ties go to no, and order never matters", () => {
+  fc.assert(
+    fc.property(fc.array(dated, { maxLength: 6 }), (copies) => {
+      const merged = mergeChoices(...copies);
+      expect(mergeChoices(...[...copies].reverse())).toEqual(merged);
+      for (const category of ["analytics", "ads"] as const) {
+        const answered = copies.filter((item) => item[category] !== undefined);
+        if (answered.length === 0) {
+          expect(merged[category]).toBeUndefined();
+          continue;
+        }
+        const latest = Math.max(...answered.map((item) => item.at ?? 0));
+        const atLatest = answered.filter((item) => (item.at ?? 0) === latest).map((item) => item[category]);
+        expect(merged[category]).toBe(atLatest.includes("no") ? "no" : "yes");
+      }
+      // Whatever was stored, a newer explicit answer is what is read back.
+      const now = Math.max(0, ...copies.map((item) => item.at ?? 0)) + 1;
+      expect(mergeChoices(...copies, { analytics: "yes", at: now }).analytics).toBe("yes");
+      const answered = merged.analytics !== undefined || merged.ads !== undefined;
+      const stored = Object.fromEntries(Object.entries(merged).filter(([key, value]) => value !== undefined && (answered || key !== "at")));
+      expect(parseChoices(formatChoices(merged))).toEqual(stored);
+    }),
+  );
 });
 
 test("property: URL-keyed bags keep no fragment or unlisted parameter in any key, and lose no entries", () => {

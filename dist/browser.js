@@ -148,7 +148,7 @@ function afterFirstPageview(then) {
     then();
   };
 }
-function arrivalOf(path, search, referrer, contentParams = []) {
+function arrivalOf(path, search, referrer, contentParams = [], routes = []) {
   const input = new URLSearchParams(search);
   const kept = new URLSearchParams;
   for (const name of CAMPAIGNS) {
@@ -172,12 +172,47 @@ function arrivalOf(path, search, referrer, contentParams = []) {
       content[name] = value;
   }
   return {
-    path: path.split(/[?#]/u, 1)[0] || "/",
+    path: routePattern(path.split(/[?#]/u, 1)[0] || "/", routes),
     search: kept.toString(),
     referrer: referrerSite(referrer),
     ...fbclid !== null && /^[\w-]{1,400}$/u.test(fbclid) ? { fbclid } : {},
     content
   };
+}
+var ARRIVAL_GLOBAL = "__hranessArrival";
+var ARRIVAL_SCRIPT = `window.${ARRIVAL_GLOBAL}=window.${ARRIVAL_GLOBAL}||{path:location.pathname,search:location.search,referrer:document.referrer};`;
+function parseArrivalSnapshot(value) {
+  if (typeof value !== "object" || value === null)
+    return;
+  const { path, search, referrer } = value;
+  if (typeof path !== "string" || !path.startsWith("/") || path.length > 2048)
+    return;
+  if (typeof search !== "string" || search !== "" && !search.startsWith("?") || search.length > 4096)
+    return;
+  if (typeof referrer !== "string" || referrer.length > 4096)
+    return;
+  return { path, search, referrer };
+}
+function snapshotArrival() {
+  const scope = globalThis;
+  const held = parseArrivalSnapshot(scope[ARRIVAL_GLOBAL]);
+  if (held !== undefined)
+    return held;
+  if (typeof location === "undefined" || typeof document === "undefined")
+    return;
+  let made;
+  try {
+    made = { path: location.pathname, search: location.search, referrer: document.referrer };
+  } catch {
+    return;
+  }
+  const parsed = parseArrivalSnapshot(made);
+  if (parsed === undefined)
+    return;
+  try {
+    scope[ARRIVAL_GLOBAL] = parsed;
+  } catch {}
+  return parsed;
 }
 function clickKind(search, fbclid) {
   const params = new URLSearchParams(search);
@@ -378,6 +413,8 @@ function cleanValue(key, value, options, depth) {
     return refLabel(value);
   const routes = options.routes ?? [];
   if (typeof value === "string") {
+    if (/referrer_host$/iu.test(key))
+      return /^[a-z0-9.-]{1,253}$/u.test(value) ? value : referrerHost(value) || undefined;
     if (/referrer/iu.test(key))
       return value === "$direct" ? value : referrerSite(value);
     if (key === "$elements_chain")
@@ -503,12 +540,16 @@ var visitId = (value) => typeof value === "string" && UUID.test(value) ? value.t
 function accountId(value) {
   return typeof value === "string" && /^[A-Za-z0-9_:.-]{8,128}$/u.test(value) && !value.includes("@") ? value : undefined;
 }
+var moment = (value) => typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 function formatChoices(choices) {
   const parts = [];
   if (choices.analytics !== undefined)
     parts.push(`a=${choices.analytics}`);
   if (choices.ads !== undefined)
     parts.push(`d=${choices.ads}`);
+  const at = moment(choices.at);
+  if (parts.length > 0 && at !== undefined)
+    parts.push(`t=${String(at)}`);
   return parts.join("&");
 }
 function parseChoices(value) {
@@ -516,11 +557,28 @@ function parseChoices(value) {
     return {};
   const params = new URLSearchParams(value);
   const choice = (raw) => raw === "yes" || raw === "no" ? raw : undefined;
-  return { analytics: choice(params.get("a")), ads: choice(params.get("d")) };
+  const t = params.get("t");
+  const at = t !== null && /^\d{1,16}$/u.test(t) ? moment(Number(t)) : undefined;
+  return { analytics: choice(params.get("a")), ads: choice(params.get("d")), ...at === undefined ? {} : { at } };
 }
 function mergeChoices(...all) {
-  const pick = (values) => values.includes("no") ? "no" : values.includes("yes") ? "yes" : undefined;
-  return { analytics: pick(all.map((item) => item.analytics)), ads: pick(all.map((item) => item.ads)) };
+  const pick = (category) => {
+    let best;
+    let bestAt = -1;
+    for (const item of all) {
+      const value = item[category];
+      if (value === undefined)
+        continue;
+      const at2 = moment(item.at) ?? 0;
+      if (at2 > bestAt || at2 === bestAt && value === "no") {
+        best = value;
+        bestAt = at2;
+      }
+    }
+    return best;
+  };
+  const at = Math.max(0, ...all.map((item) => moment(item.at) ?? 0));
+  return { analytics: pick("analytics"), ads: pick("ads"), ...at > 0 ? { at } : {} };
 }
 function sessionFor(value, now) {
   if (typeof value !== "object" || value === null)
@@ -859,7 +917,7 @@ function createAnalytics(config) {
   const words = config.words ?? ENGLISH;
   const linked = linkChoice(location.search);
   if (linked !== undefined) {
-    store(mergeChoices(storedChoices(), linked));
+    store(mergeChoices(storedChoices(), { ...linked, at: Date.now() }));
     const rest = new URLSearchParams(location.search);
     rest.delete("analytics");
     rest.delete("ads");
@@ -872,7 +930,9 @@ function createAnalytics(config) {
   const runs = config.token !== "" && !native && !navigator.webdriver && config.hosts.includes(location.hostname);
   if (!runs)
     return OFF;
-  const arrival = arrivalOf(location.pathname, location.search, document.referrer, config.contentParams ?? []);
+  const routes = [...config.clean?.routes ?? [], ...config.privatePaths ?? []];
+  const seen = snapshotArrival() ?? { path: location.pathname, search: location.search, referrer: document.referrer };
+  const arrival = arrivalOf(seen.path, seen.search, seen.referrer, config.contentParams ?? [], routes);
   let on = true;
   let client;
   let policy;
@@ -964,7 +1024,8 @@ function createAnalytics(config) {
     } catch {
       stored = undefined;
     }
-    const before = parseFirstTouch(stored?.touch);
+    const kept = parseFirstTouch(stored?.touch);
+    const before = kept === undefined ? undefined : { ...kept, landing: routePattern(kept.landing, routes) };
     const session = sessionFor(stored?.session, now);
     distinct = visitId(stored?.id) ?? visitId(readCookie(keys.id)) ?? crypto.randomUUID();
     identified = accountId(stored?.account);
@@ -1007,7 +1068,6 @@ function createAnalytics(config) {
         if (kept === null)
           return null;
         const allowProps = config.clean?.allowProps;
-        const routes = [...config.clean?.routes ?? [], ...config.privatePaths ?? []];
         const cleaned = cleanEvent({ ...kept, properties: { ...kept.properties, ...facts } }, allowProps === undefined ? { routes } : { routes, allowProps: [...allowProps, ...Object.keys(facts)] });
         queueMicrotask(() => {
           tidy(event.event);
@@ -1215,7 +1275,7 @@ function createAnalytics(config) {
     choose(scope, choice) {
       const before = storedChoices();
       const next = scope === "all" ? { analytics: choice, ads: choice } : { ...before, ads: choice };
-      store(next);
+      store({ ...next, at: Date.now() });
       send("analytics choice made", { choice, scope });
       const was = policy;
       policy = currentPolicy();
@@ -1234,7 +1294,7 @@ function createAnalytics(config) {
       }
     },
     privacyChoices() {
-      store({ ...storedChoices(), ads: "no" });
+      store({ ...storedChoices(), ads: "no", at: Date.now() });
       client?.stopSessionRecording();
       adsOff();
       if (policy)
@@ -1273,6 +1333,7 @@ function createAnalytics(config) {
 export {
   withoutTracking,
   visitId,
+  snapshotArrival,
   sessionFor,
   regionAddress,
   refOf,
@@ -1297,7 +1358,8 @@ export {
   accountId,
   ID_MAX_AGE_SECONDS,
   ENGLISH,
-  DEFAULT_PRIVATE_SELECTOR
+  DEFAULT_PRIVATE_SELECTOR,
+  ARRIVAL_SCRIPT
 };
 
-//# debugId=0DF168A1E9395ECC64756E2164756E21
+//# debugId=F5BDE8753EA7D37964756E2164756E21

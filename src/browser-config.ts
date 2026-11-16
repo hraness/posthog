@@ -58,7 +58,7 @@ export type BrowserConfig = Readonly<{
   regionUrl?: string | false;
   /** Query parameters that change what a page shows and are recorded as `first_<name>` (`story`, `ad`). */
   contentParams?: readonly string[];
-  /** `first_landing_kind` from the landing path. */
+  /** `first_landing_kind` from the landing path (its route pattern when it matches `privatePaths` or `clean.routes`). */
   landingKind?: (path: string) => string | undefined;
   channel?: ChannelOptions;
   /** Paths where nothing is recorded or heat-mapped and only allowlisted clicks are captured. */
@@ -181,24 +181,51 @@ export function accountId(value: unknown): string | undefined {
   return typeof value === "string" && /^[A-Za-z0-9_:.-]{8,128}$/u.test(value) && !value.includes("@") ? value : undefined;
 }
 
-/** Choices as stored in one cookie: `a=yes&d=no` (`a` analytics, `d` ads and recordings). */
-export function formatChoices(choices: Choices): string {
+/** Choices with when they were made (`at`, milliseconds since 1970), so a later answer can win over an earlier one. */
+export type DatedChoices = Choices & Readonly<{ at?: number | undefined }>;
+
+const moment = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+
+/** Choices as stored in one cookie: `a=yes&d=no&t=1763251200000` (`a` analytics, `d` ads and recordings, `t` when). */
+export function formatChoices(choices: DatedChoices): string {
   const parts: string[] = [];
   if (choices.analytics !== undefined) parts.push(`a=${choices.analytics}`);
   if (choices.ads !== undefined) parts.push(`d=${choices.ads}`);
+  const at = moment(choices.at);
+  if (parts.length > 0 && at !== undefined) parts.push(`t=${String(at)}`);
   return parts.join("&");
 }
-export function parseChoices(value: unknown): Choices {
+export function parseChoices(value: unknown): DatedChoices {
   if (typeof value !== "string") return {};
   const params = new URLSearchParams(value);
   const choice = (raw: string | null): Choice | undefined => (raw === "yes" || raw === "no" ? raw : undefined);
-  return { analytics: choice(params.get("a")), ads: choice(params.get("d")) };
+  const t = params.get("t");
+  const at = t !== null && /^\d{1,16}$/u.test(t) ? moment(Number(t)) : undefined;
+  return { analytics: choice(params.get("a")), ads: choice(params.get("d")), ...(at === undefined ? {} : { at }) };
 }
-/** Merge answers; an explicit no in any copy wins over a yes in another (a blocked store can leave an old yes). */
-export function mergeChoices(...all: readonly Choices[]): Choices {
-  const pick = (values: readonly (Choice | undefined)[]): Choice | undefined =>
-    values.includes("no") ? "no" : values.includes("yes") ? "yes" : undefined;
-  return { analytics: pick(all.map((item) => item.analytics)), ads: pick(all.map((item) => item.ads)) };
+/**
+ * Merge answers, per category. The latest answer wins: an explicit later yes overrides an earlier no. "Later" means
+ * a later `at`; copies with the same or no `at` (two stores holding one answer, or records from before 1.0.3) keep the
+ * old rule that a no wins, because a blocked store can leave an old yes behind.
+ */
+export function mergeChoices(...all: readonly DatedChoices[]): DatedChoices {
+  const pick = (category: "analytics" | "ads"): Choice | undefined => {
+    let best: Choice | undefined;
+    let bestAt = -1;
+    for (const item of all) {
+      const value = item[category];
+      if (value === undefined) continue;
+      const at = moment(item.at) ?? 0;
+      if (at > bestAt || (at === bestAt && value === "no")) {
+        best = value;
+        bestAt = at;
+      }
+    }
+    return best;
+  };
+  const at = Math.max(0, ...all.map((item) => moment(item.at) ?? 0));
+  return { analytics: pick("analytics"), ads: pick("ads"), ...(at > 0 ? { at } : {}) };
 }
 
 export type VisitSession = Readonly<{ id: string; started: number; last: number }>;
