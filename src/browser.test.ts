@@ -49,7 +49,7 @@ await mock.module("posthog-js/dist/module.no-external.js", () => ({ default: roo
 for (const part of ["exception-autocapture", "web-vitals", "web-vitals-with-attribution", "dead-clicks-autocapture", "posthog-recorder"]) {
   await mock.module(`posthog-js/dist/${part}.js`, () => ({}));
 }
-const { createAnalytics } = await import("./browser.js");
+const { ARRIVAL_SCRIPT, createAnalytics, snapshotArrival } = await import("./browser.js");
 
 class Element {
   children: Element[] = [];
@@ -80,7 +80,18 @@ const find = (from: Element, className: string): Element | undefined => {
   return undefined;
 };
 
-type PageOptions = { href: string; zone?: string | undefined; region?: unknown; regionUrl?: string | false; gpc?: boolean; body?: boolean; cookies?: string[] };
+type PageOptions = {
+  href: string;
+  zone?: string | undefined;
+  region?: unknown;
+  regionUrl?: string | false;
+  gpc?: boolean;
+  body?: boolean;
+  cookies?: string[];
+  referrer?: string;
+  local?: Record<string, string>;
+  session?: Record<string, string>;
+};
 const saved = new Map<string, PropertyDescriptor | undefined>();
 function setGlobal(name: string, value: unknown) {
   if (!saved.has(name)) saved.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
@@ -93,6 +104,7 @@ afterEach(() => {
   }
   saved.clear();
   instances.length = 0;
+  Reflect.deleteProperty(globalThis, "__hranessArrival");
 });
 
 function page(options: PageOptions) {
@@ -108,7 +120,7 @@ function page(options: PageOptions) {
   const body = new Element();
   const doc = {
     readyState: "complete",
-    referrer: "",
+    referrer: options.referrer ?? "",
     body: options.body === false ? null : body,
     get cookie() {
       return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
@@ -127,9 +139,9 @@ function page(options: PageOptions) {
       if (type === "DOMContentLoaded") domLoaded.push(listener);
     },
   };
-  const store = () => {
-    const map = new Map<string, string>();
-    return { getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => { map.set(key, value); }, removeItem: (key: string) => { map.delete(key); } };
+  const store = (initial: Record<string, string> = {}) => {
+    const map = new Map<string, string>(Object.entries(initial));
+    return { map, getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => { map.set(key, value); }, removeItem: (key: string) => { map.delete(key); } };
   };
   const location = {
     get href() { return url.href; },
@@ -155,8 +167,10 @@ function page(options: PageOptions) {
   setGlobal("location", location);
   setGlobal("history", history);
   setGlobal("navigator", { webdriver: false, globalPrivacyControl: options.gpc === true });
-  setGlobal("localStorage", store());
-  setGlobal("sessionStorage", store());
+  const local = store(options.local);
+  const session = store(options.session);
+  setGlobal("localStorage", local);
+  setGlobal("sessionStorage", session);
   setGlobal("fetch", (address: string) => {
     fetched.push(address);
     return Promise.resolve(new Response(JSON.stringify({ country: null, region_group: "eu", gpc: false, policy: {} })));
@@ -164,7 +178,7 @@ function page(options: PageOptions) {
   const realFormat = Intl.DateTimeFormat;
   setGlobal("Intl", { ...Intl, DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: options.zone }) }) });
   void realFormat;
-  return { jar, cleared, fetched, body, domLoaded, location, history };
+  return { jar, cleared, fetched, body, domLoaded, location, history, local: local.map, session: session.map };
 }
 
 const settle = async () => {
@@ -406,6 +420,159 @@ describe("the browser client", () => {
     expect(Object.values(heatmap).flat()).toHaveLength(4);
   });
 
+  test("first_landing is the landing's route pattern, never the private path, and old records are reduced too", async () => {
+    const kinds: string[] = [];
+    const tab = page({ href: "https://example.com/library/items/item-8c1f?utm_source=newsletter", zone: "America/New_York", regionUrl: false });
+    createAnalytics({
+      ...base,
+      preset: "app",
+      regionUrl: false,
+      privatePaths: ["/library/items/:id"],
+      clean: { routes: ["/s/:slug"] },
+      landingKind: (path) => { kinds.push(path); return "library"; },
+    });
+    await settle();
+    const ph = latest();
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    capture("$pageview", { $current_url: "https://example.com/library/items/item-8c1f" });
+    const props = ph.sent.at(-1)?.properties;
+    expect(props).toMatchObject({ first_landing: "/library/items/:id", first_landing_kind: "library", utm_source: "newsletter" });
+    expect(kinds.length).toBeGreaterThan(0);
+    expect(new Set(kinds)).toEqual(new Set(["/library/items/:id"]));
+    expect(JSON.stringify(props)).not.toContain("item-8c1f");
+    expect([...tab.local.values()].join("")).not.toContain("item-8c1f");
+
+    // A parameterised public route (`clean.routes`) is reduced as well.
+    afterEachReset();
+    page({ href: "https://example.com/s/private-share-slug", zone: "America/New_York", regionUrl: false });
+    createAnalytics({ ...base, preset: "marketing", regionUrl: false, clean: { routes: ["/s/:slug"] } });
+    await settle();
+    capture("$pageview", {});
+    expect(latest().sent.at(-1)?.properties.first_landing).toBe("/s/:slug");
+
+    // A first-touch record kept by 1.0.2 still holds the raw path; it is reduced as it is read.
+    afterEachReset();
+    const old = {
+      id: "0b8f7e2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b",
+      touch: { channel: "direct", source: "", landing: "/library/items/item-8c1f", clickKind: "none", week: "2026-11-09", days: 1, last: "2026-11-10" },
+    };
+    const again = page({ href: "https://example.com/", zone: "America/New_York", regionUrl: false, local: { "example-touch": JSON.stringify(old) } });
+    createAnalytics({ ...base, preset: "app", regionUrl: false, privatePaths: ["/library/items/:id"] });
+    await settle();
+    capture("$pageview", {});
+    expect(latest().sent.at(-1)?.properties).toMatchObject({ first_landing: "/library/items/:id", returning: true });
+    expect(again.local.get("example-touch")).not.toContain("item-8c1f");
+  });
+
+  test("the arrival snapshot taken at load survives a router rewrite before the client is imported", async () => {
+    const tab = page({ href: "https://example.com/launch?utm_source=newsletter&utm_campaign=fall&ref=hn&story=night", zone: "America/New_York", regionUrl: false, referrer: "https://news.ycombinator.com/item?id=1" });
+    const snapshot = snapshotArrival();
+    expect(snapshot).toEqual({ path: "/launch", search: "?utm_source=newsletter&utm_campaign=fall&ref=hn&story=night", referrer: "https://news.ycombinator.com/item?id=1" });
+    // The app's router replaces the address long before analytics is loaded.
+    tab.history.replaceState(null, "", "/app/home");
+    expect(snapshotArrival()).toEqual(snapshot);
+    createAnalytics({ ...base, preset: "marketing", regionUrl: false, contentParams: ["story"] });
+    await settle();
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    capture("$pageview", {});
+    expect(latest().sent.at(-1)?.properties).toMatchObject({
+      first_landing: "/launch",
+      first_source: "newsletter",
+      first_campaign: "fall",
+      first_ref: "hn",
+      first_story: "night",
+      first_referrer_host: "news.ycombinator.com",
+      utm_source: "newsletter",
+    });
+  });
+
+  test("the inline arrival script holds the same snapshot, and a bad one is ignored", async () => {
+    page({ href: "https://example.com/from-head?utm_source=newsletter", zone: "America/New_York", regionUrl: false, referrer: "https://www.google.com/search?q=x" });
+    // The `<head>` script runs against the page's own window; here, the global scope.
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval -- runs the published inline script exactly as a page would.
+    const run = new Function("window", "location", "document", ARRIVAL_SCRIPT) as (scope: unknown, where: unknown, doc: unknown) => void;
+    run(globalThis, location, document);
+    history.replaceState(null, "", "/elsewhere");
+    expect(snapshotArrival()).toEqual({ path: "/from-head", search: "?utm_source=newsletter", referrer: "https://www.google.com/search?q=x" });
+    createAnalytics({ ...base, preset: "marketing", regionUrl: false });
+    await settle();
+    (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture("$pageview", {});
+    expect(latest().sent.at(-1)?.properties).toMatchObject({ first_landing: "/from-head", first_channel: "search", utm_source: "newsletter" });
+
+    afterEachReset();
+    page({ href: "https://example.com/now", zone: "America/New_York", regionUrl: false });
+    for (const bad of [{ path: "no-slash", search: "", referrer: "" }, { path: "/x", search: "utm_source=a", referrer: "" }, { path: "/x", search: "", referrer: 5 }, "nope"]) {
+      Object.assign(globalThis, { __hranessArrival: bad });
+      expect(snapshotArrival()).toEqual({ path: "/now", search: "", referrer: "" });
+      Reflect.deleteProperty(globalThis, "__hranessArrival");
+    }
+  });
+
+  test("a later yes overrides an earlier no: the privacy link and the banner both turn analytics back on", async () => {
+    const eu = { country: "DE", region_group: "eu", gpc: false } as const;
+    const tab = page({ href: "https://example.com/privacy?analytics=on", zone: "Europe/Berlin", region: eu, cookies: ["example-choice=a%3Dno%26d%3Dno"] });
+    const linked = createAnalytics({ ...base, preset: "marketing" });
+    await settle();
+    // The link answered analytics only; the earlier ads no stands.
+    expect(linked.policy()).toMatchObject({ analytics: "persistent", ads: false });
+    expect(decodeURIComponent(tab.jar.get("example-choice") ?? "")).toMatch(/^a=yes&d=no&t=\d+$/u);
+
+    // A stale no left in another store (session) gives way to the banner's yes.
+    afterEachReset();
+    page({ href: "https://example.com/", zone: "Europe/Berlin", region: eu, session: { "example-choice": "a=no&d=no" } });
+    const asked = createAnalytics({ ...base, preset: "marketing" });
+    await settle();
+    expect(asked.policy()?.analytics).toBe("cookieless");
+    asked.choose("all", "yes");
+    await settle();
+    expect(asked.policy()?.analytics).toBe("persistent");
+    expect(asked.distinctId()).toMatch(/^[0-9a-f-]{36}$/u);
+
+    // And a later no still wins over that yes.
+    asked.choose("all", "no");
+    expect(asked.policy()?.analytics).toBe("cookieless");
+  });
+
+  test("heatmap data keyed by private or parameterised pages is keyed by the pattern, relative keys too", async () => {
+    page({ href: "https://example.com/", zone: "America/New_York", regionUrl: false });
+    createAnalytics({ ...base, preset: "marketing", regionUrl: false, privatePaths: ["/library/*"], clean: { routes: ["/s/:slug"] } });
+    await settle();
+    const ph = latest();
+    expect(ph.options.capture_heatmaps).toBe(true);
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    const point = { x: 4, y: 8, target_fixed: false, type: "click" };
+    capture("$$heatmap", {
+      $current_url: "https://example.com/",
+      $heatmap_data: {
+        "https://example.com/s/first-share?utm_source=newsletter": [point],
+        "https://example.com/s/second-share#top": [point, point],
+        "/s/third-share": [point],
+        "https://example.com/library/items/a1/notes": [point],
+        "https://example.com/pricing": [point],
+      },
+    });
+    const sent = ph.sent.at(-1);
+    expect(sent?.event).toBe("$$heatmap");
+    const heatmap = sent?.properties.$heatmap_data as Record<string, unknown[]>;
+    expect(Object.keys(heatmap).sort()).toEqual([
+      "/s/:slug",
+      "https://example.com/library/*",
+      "https://example.com/pricing",
+      "https://example.com/s/:slug",
+      "https://example.com/s/:slug?utm_source=newsletter",
+    ]);
+    expect(heatmap["https://example.com/s/:slug"]).toHaveLength(2);
+    expect(Object.values(heatmap).flat()).toHaveLength(6);
+    expect(JSON.stringify(heatmap)).not.toMatch(/share|a1/u);
+  });
+
+  test("the app preset never turns heatmaps on, so no heatmap data is collected there", async () => {
+    page({ href: "https://example.com/", zone: "America/New_York", regionUrl: false });
+    createAnalytics({ ...base, preset: "app", regionUrl: false });
+    await settle();
+    expect(latest().options).toMatchObject({ capture_heatmaps: false, rageclick: false, capture_dead_clicks: false });
+  });
+
   test("a message before the body exists waits for it instead of throwing", () => {
     const tab = page({ href: "https://example.com/?ads=off", zone: "America/New_York", body: false });
     expect(() => createAnalytics({ ...base, preset: "marketing" })).not.toThrow();
@@ -419,4 +586,5 @@ function afterEachReset() {
     else Object.defineProperty(globalThis, name, descriptor);
   }
   saved.clear();
+  Reflect.deleteProperty(globalThis, "__hranessArrival");
 }

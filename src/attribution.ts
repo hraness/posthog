@@ -1,7 +1,7 @@
 /**
  * Arrival attribution and event cleaning: launch tags (`?ref=`), channels, the first-touch set, address-bar
  * tidying and the recursive property cleaner. Pure, with no browser or provider import, so the browser, the edge and
- * a server that counts a page view all use the same words.
+ * a server that counts a page view all use the same words. `snapshotArrival` alone reads the page, and only when called.
  */
 
 /** UTM parameters, in the order they are read. */
@@ -178,7 +178,11 @@ export type Arrival = Readonly<{
   content: Readonly<Record<string, string>>;
 }>;
 
-export function arrivalOf(path: string, search: string, referrer: string, contentParams: readonly string[] = []): Arrival {
+/**
+ * The safe facts of an arrival. With `routes`, a path that matches one (a private or parameterised page) is kept as
+ * its pattern, so `first_landing` never names an item.
+ */
+export function arrivalOf(path: string, search: string, referrer: string, contentParams: readonly string[] = [], routes: readonly RoutePattern[] = []): Arrival {
   const input = new URLSearchParams(search);
   const kept = new URLSearchParams();
   for (const name of CAMPAIGNS) {
@@ -197,12 +201,60 @@ export function arrivalOf(path: string, search: string, referrer: string, conten
     if (value !== undefined) content[name] = value;
   }
   return {
-    path: path.split(/[?#]/u, 1)[0] || "/",
+    path: routePattern(path.split(/[?#]/u, 1)[0] || "/", routes),
     search: kept.toString(),
     referrer: referrerSite(referrer),
     ...(fbclid !== null && /^[\w-]{1,400}$/u.test(fbclid) ? { fbclid } : {}),
     content,
   };
+}
+
+/** The address a visit arrived at, as the page first saw it: before a router or the client rewrote it. */
+export type ArrivalSnapshot = Readonly<{ path: string; search: string; referrer: string }>;
+
+/** Where the snapshot is held for the page's lifetime. */
+export const ARRIVAL_GLOBAL = "__hranessArrival";
+
+/**
+ * An inline `<head>` script that takes the snapshot before any other script runs. The same as calling
+ * `snapshotArrival()` from the page's first module.
+ */
+export const ARRIVAL_SCRIPT = `window.${ARRIVAL_GLOBAL}=window.${ARRIVAL_GLOBAL}||{path:location.pathname,search:location.search,referrer:document.referrer};`;
+
+/** A held snapshot parsed from `unknown`, or undefined. */
+export function parseArrivalSnapshot(value: unknown): ArrivalSnapshot | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { path, search, referrer } = value as Record<string, unknown>;
+  if (typeof path !== "string" || !path.startsWith("/") || path.length > 2048) return undefined;
+  if (typeof search !== "string" || (search !== "" && !search.startsWith("?")) || search.length > 4096) return undefined;
+  if (typeof referrer !== "string" || referrer.length > 4096) return undefined;
+  return { path, search, referrer };
+}
+
+/**
+ * Takes the arrival snapshot once per page and returns it: the landing path, query (UTMs, launch tags) and referrer,
+ * read synchronously. Call it (or inline `ARRIVAL_SCRIPT`) at load, and `createAnalytics` can then be imported later,
+ * after the router has rewritten the address, without losing how the visit arrived. Undefined outside a browser.
+ */
+export function snapshotArrival(): ArrivalSnapshot | undefined {
+  const scope = globalThis as typeof globalThis & { [ARRIVAL_GLOBAL]?: unknown };
+  const held = parseArrivalSnapshot(scope[ARRIVAL_GLOBAL]);
+  if (held !== undefined) return held;
+  if (typeof location === "undefined" || typeof document === "undefined") return undefined;
+  let made: ArrivalSnapshot;
+  try {
+    made = { path: location.pathname, search: location.search, referrer: document.referrer };
+  } catch {
+    return undefined;
+  }
+  const parsed = parseArrivalSnapshot(made);
+  if (parsed === undefined) return undefined;
+  try {
+    scope[ARRIVAL_GLOBAL] = parsed;
+  } catch {
+    // A frozen global: the snapshot still serves this call.
+  }
+  return parsed;
 }
 
 /** Which ad click brought the visit, by presence only. */
@@ -448,6 +500,8 @@ function cleanValue(key: string, value: unknown, options: CleanOptions, depth: n
   if (REF_FIELD.test(key)) return refLabel(value);
   const routes = options.routes ?? [];
   if (typeof value === "string") {
+    // A host (`first_referrer_host`) is already only a host; read as an address it would come out empty.
+    if (/referrer_host$/iu.test(key)) return /^[a-z0-9.-]{1,253}$/u.test(value) ? value : referrerHost(value) || undefined;
     if (/referrer/iu.test(key)) return value === "$direct" ? value : referrerSite(value);
     if (key === "$elements_chain") return cleanChain(value, routes);
     const text = LINKISH.test(key) && !/\s/u.test(value)

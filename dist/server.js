@@ -7,6 +7,8 @@ function refLabel(value) {
   const label = typeof value === "string" ? value.trim().toLowerCase() : "";
   return /^[a-z0-9._-]{1,40}$/u.test(label) ? label : undefined;
 }
+var ARRIVAL_GLOBAL = "__hranessArrival";
+var ARRIVAL_SCRIPT = `window.${ARRIVAL_GLOBAL}=window.${ARRIVAL_GLOBAL}||{path:location.pathname,search:location.search,referrer:document.referrer};`;
 
 // src/events.ts
 var SCHEMA = 2;
@@ -577,10 +579,57 @@ async function readCapped(request, limit) {
   }
   return new TextDecoder().decode(bytes);
 }
-async function wireHandler(config, request, events = {}, waitUntil) {
+var whole = (value, fallback, min, max) => typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback;
+function rateLimit(options = {}) {
+  const limit = whole(options.limit, 60, 1, 1e6);
+  const windowMs = whole(options.windowMs, 60000, 1000, 86400000);
+  const maxKeys = whole(options.maxKeys, 1e4, 1, 1e6);
+  const windows = new Map;
+  const current = (key, now) => {
+    const found = windows.get(key);
+    if (found !== undefined && now >= found.start && now - found.start < windowMs)
+      return found;
+    windows.delete(key);
+    if (windows.size >= maxKeys) {
+      const oldest = windows.keys().next();
+      if (oldest.done !== true)
+        windows.delete(oldest.value);
+    }
+    const made = { start: now, used: 0 };
+    windows.set(key, made);
+    return made;
+  };
+  return {
+    take(key, now = Date.now()) {
+      const slot = current(key, now);
+      if (slot.used >= limit)
+        return false;
+      slot.used += 1;
+      return true;
+    },
+    retryAfter(key, now = Date.now()) {
+      const found = windows.get(key);
+      if (found === undefined)
+        return 1;
+      return Math.max(1, Math.ceil((found.start + windowMs - now) / 1000));
+    }
+  };
+}
+function clientAddress(source) {
+  const headers = headersOf(source);
+  const forwarded = headers.get("x-forwarded-for")?.split(",", 1)[0];
+  const value = [headers.get("cf-connecting-ip"), headers.get("x-real-ip"), forwarded].map((item) => item?.trim()).find((item) => item !== undefined && item !== "");
+  return value !== undefined && /^[0-9A-Fa-f.:]{2,45}$/u.test(value) ? value : undefined;
+}
+var tooMany = (seconds) => new Response(null, { status: 429, headers: { "retry-after": String(seconds), "cache-control": "no-store" } });
+async function wireHandler(config, request, events = {}, waitUntil, limits = {}) {
   const empty = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
   if (request.method !== "POST")
     return new Response(null, { status: 405, headers: { allow: "POST" } });
+  const address = clientAddress(request);
+  if (limits.perAddress !== undefined && address !== undefined && !limits.perAddress.take(`address\x00${address}`)) {
+    return tooMany(limits.perAddress.retryAfter(`address\x00${address}`));
+  }
   const length = Number(request.headers.get("content-length") ?? "0");
   if (length > WIRE_LIMIT)
     return new Response(null, { status: 413 });
@@ -597,11 +646,17 @@ async function wireHandler(config, request, events = {}, waitUntil) {
   const parsed = list.map((item) => parseWireEvent(item, events)).filter((item) => item !== undefined);
   if (parsed.length === 0)
     return new Response(null, { status: 400 });
-  for (const event of parsed)
+  const perInstall = limits.perInstall;
+  const kept = perInstall === undefined ? parsed : parsed.filter((event) => perInstall.take(`install\x00${event.install}`));
+  if (kept.length === 0 && perInstall !== undefined)
+    return tooMany(perInstall.retryAfter(`install\x00${parsed[0]?.install ?? ""}`));
+  for (const event of kept)
     capture(config, () => wireCapture(config, event), waitUntil);
   return empty();
 }
-function downloadServed(config, input, waitUntil) {
+function downloadServed(config, input, waitUntil, limit) {
+  if (limit !== undefined && limit.key !== undefined && !limit.rate.take(`download\x00${limit.key}`))
+    return Promise.resolve();
   const ref = refLabel(input.ref);
   const visit = typeof input.visit === "string" && UUID.test(input.visit) ? input.visit.toLowerCase() : undefined;
   const version = input.version !== undefined && /^[0-9A-Za-z.+-]{1,40}$/u.test(input.version) ? input.version : undefined;
@@ -634,11 +689,13 @@ export {
   regionScript,
   regionOf,
   regionHandler,
+  rateLimit,
   parseWireEvent,
   money,
   installDistinctId,
   downloadServed,
   deletePerson,
+  clientAddress,
   checkoutMetadata,
   captureBody,
   captureBilling,
@@ -653,4 +710,4 @@ export {
   CAPTURE_PATH
 };
 
-//# debugId=1099E6682204E94764756E2164756E21
+//# debugId=85D69E16D999FC8F64756E2164756E21

@@ -7,11 +7,13 @@ import {
   captureBilling,
   captureBody,
   checkoutMetadata,
+  clientAddress,
   deletePerson,
   downloadServed,
   installDistinctId,
   money,
   parseWireEvent,
+  rateLimit,
   regionHandler,
   regionOf,
   regionScript,
@@ -279,6 +281,100 @@ describe("the app and CLI wire format", () => {
     expect((await wireHandler(config, request)).status).toBe(413);
     // Reading stopped at the limit, not at the end of the body.
     expect(pulled).toBeLessThan(4);
+  });
+});
+
+describe("rate limits", () => {
+  const valid = { v: 1, event: "app opened", install: "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0", id: "1f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0", at: 0, app: "1.2", build: 42, os: "26.1", region: "default", props: { days_since_install_bucket: "0" } };
+
+  test("a fixed window per key, bounded keys, and safe defaults", () => {
+    const limit = rateLimit({ limit: 2, windowMs: 10_000, maxKeys: 2 });
+    expect([limit.take("a", 0), limit.take("a", 1), limit.take("a", 2)]).toEqual([true, true, false]);
+    expect(limit.retryAfter("a", 2)).toBe(10);
+    expect(limit.take("b", 3)).toBe(true);
+    // A new window starts once the old one has passed.
+    expect(limit.take("a", 10_000)).toBe(true);
+    // Past maxKeys the oldest window is forgotten, so memory stays bounded.
+    limit.take("c", 10_001);
+    expect(limit.take("b", 10_002)).toBe(true);
+    expect(limit.retryAfter("unknown", 0)).toBe(1);
+    // Defaults: 60 a minute. Nonsense options fall back or clamp instead of disabling the limit.
+    const plain = rateLimit();
+    expect(Array.from({ length: 61 }, () => plain.take("k", 0)).filter(Boolean)).toHaveLength(60);
+    const odd = rateLimit({ limit: Number.NaN, windowMs: -1, maxKeys: 0 });
+    expect(Array.from({ length: 61 }, () => odd.take("k", 0)).filter(Boolean)).toHaveLength(60);
+    expect(odd.take("k", 999)).toBe(false);
+    expect(odd.take("k", 1000)).toBe(true);
+  });
+
+  test("the client address comes from the edge's headers, and only an address is accepted", () => {
+    expect(clientAddress(new Headers({ "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "198.51.100.1" }))).toBe("203.0.113.7");
+    expect(clientAddress(new Headers({ "x-forwarded-for": " 2001:db8::1 , 10.0.0.1" }))).toBe("2001:db8::1");
+    expect(clientAddress(new Headers({ "x-real-ip": "<script>" }))).toBeUndefined();
+    expect(clientAddress(new Headers())).toBeUndefined();
+  });
+
+  test("the wire endpoint is unlimited unless limits are passed", async () => {
+    const { calls, fetcher } = recorder();
+    const fresh = { ...valid, at: Math.floor(Date.now() / 1000) };
+    const jobs: Promise<unknown>[] = [];
+    for (let index = 0; index < 100; index += 1) {
+      const request = new Request("https://example.com/api/app/event", { method: "POST", body: JSON.stringify(fresh), headers: { "cf-connecting-ip": "203.0.113.7" } });
+      expect((await wireHandler({ ...config, fetch: fetcher }, request, {}, (job) => { jobs.push(job); })).status).toBe(204);
+    }
+    await Promise.all(jobs);
+    expect(calls).toHaveLength(100);
+  });
+
+  test("per address: a request over the limit is answered 429 with retry-after, before its body is read", async () => {
+    const { calls, fetcher } = recorder();
+    const fresh = { ...valid, at: Math.floor(Date.now() / 1000) };
+    const limits = { perAddress: rateLimit({ limit: 2, windowMs: 60_000 }) };
+    const post = (address: string) => new Request("https://example.com/api/app/event", { method: "POST", body: JSON.stringify(fresh), headers: { "cf-connecting-ip": address } });
+    const jobs: Promise<unknown>[] = [];
+    const wait = (job: Promise<unknown>) => { jobs.push(job); };
+    expect((await wireHandler({ ...config, fetch: fetcher }, post("203.0.113.7"), {}, wait, limits)).status).toBe(204);
+    expect((await wireHandler({ ...config, fetch: fetcher }, post("203.0.113.7"), {}, wait, limits)).status).toBe(204);
+    const refused = post("203.0.113.7");
+    const answer = await wireHandler({ ...config, fetch: fetcher }, refused, {}, wait, limits);
+    expect(answer.status).toBe(429);
+    expect(Number(answer.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    expect(refused.bodyUsed).toBe(false);
+    // Another address has its own window.
+    expect((await wireHandler({ ...config, fetch: fetcher }, post("198.51.100.4"), {}, wait, limits)).status).toBe(204);
+    await Promise.all(jobs);
+    expect(calls).toHaveLength(3);
+  });
+
+  test("per install: events over the limit are dropped, and a batch with nothing left is 429", async () => {
+    const { calls, fetcher } = recorder();
+    const at = Math.floor(Date.now() / 1000);
+    const event = (n: number) => ({ ...valid, at, id: `0b8f7e2a-3c4d-4e5f-8a9b-0c1d2e3f4a${String(n).padStart(2, "0")}` });
+    const limits = { perInstall: rateLimit({ limit: 3 }) };
+    const post = (body: unknown) => new Request("https://example.com/api/app/event", { method: "POST", body: JSON.stringify(body) });
+    const jobs: Promise<unknown>[] = [];
+    const wait = (job: Promise<unknown>) => { jobs.push(job); };
+    expect((await wireHandler({ ...config, fetch: fetcher }, post([event(1), event(2)]), {}, wait, limits)).status).toBe(204);
+    expect((await wireHandler({ ...config, fetch: fetcher }, post([event(3), event(4)]), {}, wait, limits)).status).toBe(204);
+    expect((await wireHandler({ ...config, fetch: fetcher }, post([event(5)]), {}, wait, limits)).status).toBe(429);
+    // Another install is counted on its own.
+    const other = { ...event(6), install: "7d6c5b4a-3928-4716-a5b4-c3d2e1f0a9b8" };
+    expect((await wireHandler({ ...config, fetch: fetcher }, post(other), {}, wait, limits)).status).toBe(204);
+    await Promise.all(jobs);
+    expect(calls).toHaveLength(4);
+  });
+
+  test("a served download over its key's limit is not counted", async () => {
+    const { calls, fetcher } = recorder();
+    const rate = rateLimit({ limit: 1 });
+    const input = { platform: "mac", artifact: "zip" } as const;
+    await downloadServed({ ...config, fetch: fetcher }, input, undefined, { rate, key: "203.0.113.7" });
+    await downloadServed({ ...config, fetch: fetcher }, input, undefined, { rate, key: "203.0.113.7" });
+    await downloadServed({ ...config, fetch: fetcher }, input, undefined, { rate, key: "198.51.100.4" });
+    // No key (an address the edge did not give): counted, never refused.
+    await downloadServed({ ...config, fetch: fetcher }, input, undefined, { rate, key: undefined });
+    await downloadServed({ ...config, fetch: fetcher }, input);
+    expect(calls).toHaveLength(4);
   });
 });
 

@@ -13,6 +13,8 @@ import {
   refOf,
   matchRoute,
   remember,
+  routePattern,
+  snapshotArrival,
   withoutTracking,
   type Arrival,
   type FirstTouch,
@@ -34,14 +36,16 @@ import {
   sessionFor,
   visitId,
   type BrowserConfig,
+  type DatedChoices,
   type ConsentWords,
 } from "./browser-config.js";
 import { MILESTONES, SCHEMA, type EventName, type Props, type PropsOf } from "./events.js";
-import { parseRegionResponse, regionPolicy, type Choices, type RegionPolicy } from "./policy.js";
+import { parseRegionResponse, regionPolicy, type RegionPolicy } from "./policy.js";
 
 export * from "./browser-config.js";
 export {
   afterFirstPageview,
+  ARRIVAL_SCRIPT,
   arrivalOf,
   carryRef,
   channelOf,
@@ -50,7 +54,9 @@ export {
   firstTouchProps,
   refLabel,
   refOf,
+  snapshotArrival,
   withoutTracking,
+  type ArrivalSnapshot,
   type Channel,
 } from "./attribution.js";
 
@@ -153,7 +159,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   // The privacy page's links work even where nothing else runs, so a no given early still holds.
   const linked = linkChoice(location.search);
   if (linked !== undefined) {
-    store(mergeChoices(storedChoices(), linked));
+    store(mergeChoices(storedChoices(), { ...linked, at: Date.now() }));
     const rest = new URLSearchParams(location.search);
     rest.delete("analytics");
     rest.delete("ads");
@@ -166,7 +172,11 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   const runs = config.token !== "" && !native && !navigator.webdriver && config.hosts.includes(location.hostname);
   if (!runs) return OFF;
 
-  const arrival: Arrival = arrivalOf(location.pathname, location.search, document.referrer, config.contentParams ?? []);
+  // Private and parameterised paths, as `before_send` cleans them: the landing is kept as its pattern.
+  const routes = [...(config.clean?.routes ?? []), ...(config.privatePaths ?? [])];
+  // The snapshot taken at load, when this module was imported later; else the address as it is now.
+  const seen = snapshotArrival() ?? { path: location.pathname, search: location.search, referrer: document.referrer };
+  const arrival: Arrival = arrivalOf(seen.path, seen.search, seen.referrer, config.contentParams ?? [], routes);
   let on = true;
   let client: PostHogLike | undefined;
   let policy: RegionPolicy | undefined;
@@ -178,7 +188,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   const counts = new Map<string, number>();
   let adsStarted = false;
 
-  function storedChoices(): Choices {
+  function storedChoices(): DatedChoices {
     let session: string | undefined;
     try {
       session = sessionStorage.getItem(keys.choice) ?? undefined;
@@ -187,7 +197,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     }
     return mergeChoices(parseChoices(readLocal(keys.choice)), parseChoices(readCookie(keys.choice)), parseChoices(session));
   }
-  function store(choices: Choices) {
+  function store(choices: DatedChoices) {
     const value = formatChoices(choices);
     writeLocal(keys.choice, value === "" ? undefined : value);
     writeCookie(keys.choice, value === "" ? undefined : value);
@@ -270,7 +280,9 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     } catch {
       stored = undefined;
     }
-    const before = parseFirstTouch(stored?.touch);
+    const kept = parseFirstTouch(stored?.touch);
+    // A record from before 1.0.3 may hold a private landing as it was.
+    const before = kept === undefined ? undefined : { ...kept, landing: routePattern(kept.landing, routes) };
     const session = sessionFor(stored?.session, now);
     distinct = visitId(stored?.id) ?? visitId(readCookie(keys.id)) ?? crypto.randomUUID();
     identified = accountId(stored?.account);
@@ -309,7 +321,6 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
         const kept = isPrivate(location.pathname) ? onPrivatePath(event) : event;
         if (kept === null) return null;
         const allowProps = config.clean?.allowProps;
-        const routes = [...(config.clean?.routes ?? []), ...(config.privatePaths ?? [])];
         const cleaned = cleanEvent(
           { ...kept, properties: { ...kept.properties, ...facts } },
           allowProps === undefined ? { routes } : { routes, allowProps: [...allowProps, ...Object.keys(facts)] },
@@ -499,7 +510,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     choose(scope, choice) {
       const before = storedChoices();
       const next = scope === "all" ? { analytics: choice, ads: choice } : { ...before, ads: choice };
-      store(next);
+      store({ ...next, at: Date.now() });
       send("analytics choice made", { choice, scope });
       const was = policy;
       policy = currentPolicy();
@@ -513,7 +524,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       }
     },
     privacyChoices() {
-      store({ ...storedChoices(), ads: "no" });
+      store({ ...storedChoices(), ads: "no", at: Date.now() });
       client?.stopSessionRecording();
       adsOff();
       if (policy) policy = { ...policy, ads: false, replay: false };

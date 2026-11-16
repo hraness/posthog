@@ -81,6 +81,21 @@ describe("stored answers and identity", () => {
     expect(mergeChoices({ ads: "yes" }, {})).toEqual({ analytics: undefined, ads: "yes" });
   });
 
+  test("an explicit later yes overrides an earlier no for the same category", () => {
+    expect(parseChoices(formatChoices({ analytics: "yes", ads: "no", at: 1_763_251_200_000 }))).toEqual({ analytics: "yes", ads: "no", at: 1_763_251_200_000 });
+    expect(parseChoices("a=no&t=-5")).toEqual({ analytics: "no", ads: undefined });
+    expect(parseChoices("a=no&t=99999999999999999")).toEqual({ analytics: "no", ads: undefined });
+    expect(formatChoices({ at: 5 })).toBe("");
+    const earlier = { analytics: "no", ads: "no", at: 100 } as const;
+    expect(mergeChoices(earlier, { analytics: "yes", at: 200 })).toEqual({ analytics: "yes", ads: "no", at: 200 });
+    expect(mergeChoices({ ads: "yes", at: 200 }, earlier)).toEqual({ analytics: "no", ads: "yes", at: 200 });
+    // An undated record (before 1.0.3) is older than any dated answer.
+    expect(mergeChoices({ analytics: "no" }, { analytics: "yes", at: 1 }).analytics).toBe("yes");
+    // A later no still wins, and copies of the same moment keep the no.
+    expect(mergeChoices({ analytics: "yes", at: 100 }, { analytics: "no", at: 300 }).analytics).toBe("no");
+    expect(mergeChoices({ analytics: "yes", at: 100 }, { analytics: "no", at: 100 }).analytics).toBe("no");
+  });
+
   test("the privacy page's links", () => {
     expect(linkChoice("?analytics=off")).toEqual({ analytics: "no", ads: "no" });
     expect(linkChoice("?analytics=on")).toEqual({ analytics: "yes" });
