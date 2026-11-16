@@ -10,13 +10,13 @@ tags:
 
 # Repository agent context
 
-The root `AGENTS.md` is the repository's normative control plane. Its rules apply before deeper lookup. This repository is a standalone public package for privacy-preserving PostHog integration across pure data, browser, React, Node, and build-time boundaries.
+The root `AGENTS.md` is the repository's normative control plane. Its rules apply before deeper lookup. This repository is a standalone public package that applies one region policy and analytics standard to websites, web apps, Workers, CLIs, and Mac apps, with a Swift package beside the TypeScript one.
 
 ## Authority and repository seams
 
 `AGENTS.md` owns instructions needed before editing. Repository `docs/` owns current multi-step procedures when present. Types, tests, schemas, and deterministic checkers own executable contracts. The KB owns pull-based rationale, history, evidence, maintained synthesis, plans, and relationships.
 
-[[notes/documentation-ownership|Documentation ownership]] preserves that split. [[notes/repository-seams|Repository seams]] records analytics ownership, export isolation, immutable dependency policy, the headless design boundary, and parallel-work constraints. This hub can explain those rules but cannot override them.
+[[notes/documentation-ownership|Documentation ownership]] preserves that split. [[notes/repository-seams|Repository seams]] records analytics ownership, the region policy, export isolation, immutable dependency policy, the headless design boundary, and parallel-work constraints. This hub can explain those rules but cannot override them.
 
 ## Correctness before production
 

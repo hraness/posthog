@@ -114,3 +114,13 @@ describe("stored answers and identity", () => {
     expect(fromPrivateElement(undefined)).toBe(false);
   });
 });
+
+test("replay sampling is clamped and only set when asked", () => {
+  const policy = policyForGroup("us", false, {});
+  const caps = capabilities(policy, "marketing", false);
+  const recording = (replaySampleRate?: number) => posthogOptions({ config: { ...config("marketing"), ...(replaySampleRate === undefined ? {} : { replaySampleRate }) }, policy, caps, distinctId: undefined, identified: false, sessionId: undefined }).session_recording as Record<string, unknown>;
+  expect(recording()).not.toHaveProperty("sampleRate");
+  expect(recording(0.25).sampleRate).toBe(0.25);
+  expect(recording(7).sampleRate).toBe(1);
+  expect(recording(Number.NaN)).not.toHaveProperty("sampleRate");
+});

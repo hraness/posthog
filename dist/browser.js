@@ -424,6 +424,8 @@ function posthogOptions(input) {
   const { config, policy, caps } = input;
   const cookieless = policy.analytics === "cookieless";
   const privateSelector = config.privateSelector ?? DEFAULT_PRIVATE_SELECTOR;
+  const rate = config.replaySampleRate;
+  const sampleRate = typeof rate === "number" && Number.isFinite(rate) ? Math.min(1, Math.max(0, rate)) : undefined;
   const app = config.preset === "app";
   return {
     api_host: config.apiHost ?? "/ph",
@@ -455,7 +457,8 @@ function posthogOptions(input) {
       blockSelector: privateSelector,
       recordCrossOriginIframes: false,
       recordHeaders: false,
-      recordBody: false
+      recordBody: false,
+      ...sampleRate === undefined ? {} : { sampleRate }
     },
     disable_surveys: true,
     advanced_disable_feature_flags: true,
@@ -1169,4 +1172,4 @@ export {
   DEFAULT_PRIVATE_SELECTOR
 };
 
-//# debugId=BEBA516AF664A85C64756E2164756E21
+//# debugId=FEE4664B6C24EB8A64756E2164756E21

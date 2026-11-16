@@ -50,7 +50,7 @@ try {
   const installed = join(consumer, "node_modules", ...packageName.split("/"));
   const shipped = await readdir(join(installed, "src"));
   if (shipped.some((file) => file.includes(".test."))) throw new Error("installed package must not contain tests");
-  if (shipped.includes("internal.ts") === false) throw new Error("installed package must ship the sources its types import");
+  if (!shipped.includes("internal.ts")) throw new Error("installed package must ship the sources its types import");
 
   // Every export imports under genuine Node 24.
   await run([node, "--input-type=module", "-e", `await Promise.all(${JSON.stringify(specifiers)}.map((specifier) => import(specifier)))`], consumer);

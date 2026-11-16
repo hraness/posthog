@@ -7,10 +7,13 @@
 <!-- kb:context scopes/repository--cdb4ee2aea69 -->
 # Contents
 
-- `src/site.ts`, `src/event.ts`, and `src/traffic.ts` define provider-neutral schemas, routing, sanitization, privacy, and attribution.
-- `src/client.ts` and `src/react.tsx` own browser and React integration with PostHog.js.
-- `src/server.ts` owns bounded server exception reporting through PostHog Node.
-- `src/next-config.ts` owns production-only source-map configuration.
+- `src/policy.ts` owns the region table and policy every surface reads; `scripts/generate-swift-policy.ts` copies it into `swift/`.
+- `src/events.ts` and `src/attribution.ts` define the shared event vocabulary, channels, first touch, and cleaning, with no provider import.
+- `src/browser.ts` and `src/browser-config.ts` own the PostHog.js client, presets, consent banner, and identity.
+- `src/meta.ts` owns the Meta Pixel and Conversions API, gated by the policy.
+- `src/server.ts` owns the region endpoint, server capture, billing events, and the app and CLI wire endpoint, using Web APIs only.
+- `src/cli.ts` owns opt-out CLI telemetry.
+- `swift/` and `Package.swift` hold the Swift package that sends the same wire format.
 - `src/*.test.ts` and `src/*.property.test.ts` hold deterministic regressions and general laws.
 - `scripts/` builds isolated exports and verifies package, product-documentation, bundle, and public boundaries.
 - `portfolio-inventory.json` records the package publication boundary in the shared fleet contract.
@@ -26,15 +29,13 @@
 - Apply unreasonably robust programming when agent work is cheap. Parse foreign values from `unknown`, model invalid states out of existence, and pair deterministic regressions with property tests for parsers, sanitizers, budgets, routing, and attribution.
 - Deliver changes to `main` through a current-head pull request. Keep the stable `Required` CI job green, resolve every review thread, and serialize merges. Human approval stays optional while one regular maintainer would otherwise self-review. Never force-push or bypass the gate.
 - Pin Hraness dependencies to reviewed immutable releases or full commits. Never connect repositories through sibling paths, Git submodules, or coordinated `main` assumptions; upgrade consumers independently.
-- Preserve the export boundaries. The root and `./site` exports stay provider-neutral; `./client` is browser-only; `./react` adds React; `./server` is Node-only; and `./next-config` is build-time-only.
-- Never send analytics outside production, from an unapproved host, without a valid public project token, or for an event outside the site allowlist.
-- Preserve memory-only cookieless analytics, anonymous profiles, disabled autocapture and recording, URL/query redaction, bounded exception capture, and no-op failure behavior.
-- Treat source-map credentials as build-time secrets. Upload only for an exact production deployment with a supported PostHog UI host and a commit release identifier.
-- Keep Direct deterministic compositions development-only and outside every production dependency graph and published export.
+- Preserve the export boundaries. The root, `./policy`, `./events`, and `./attribution` stay provider-neutral; only `./browser` imports `posthog-js`, and only through the no-external-dependency `.js` entry points; only `./cli` imports Node built-ins; `./meta` and `./server` use Web APIs only.
+- Never send analytics from an unapproved host, without a public project token, inside a native shell, or beyond what the region policy allows. Keep the region table in `src/policy.ts` the only source of region rules and regenerate the Swift copy with it.
+- Preserve cookieless analytics until a European yes, identified-only person profiles, opaque account IDs (never emails), click-ID and email removal, no replay or heatmaps on the `app` preset or private paths, GPC turning off ads and replay, CLI `DO_NOT_TRACK`, and no-op failure behavior.
 - Freeze package interfaces before parallel lanes begin. Give exports, manifests, lockfiles, generated output, and other convergence surfaces one owner while lanes edit disjoint paths.
 - Keep `portfolio-inventory.json` generated from `package.json`; the checked inventory must match the public package name, version, repository, and Hraness dependency edges exactly.
 - Keep mandatory rules in the closest `AGENTS.md`, executable contracts in types and tests, and pull-based rationale, evidence, synthesis, and plans in `kb/`.
-- Use Bun 1.3.14 for installs, builds, and tests. Verify every installed export with genuine Node 24, including the `./next-config` fallback used by supported Next.js TypeScript config loaders.
+- Use Bun 1.3.14 for installs, builds, and tests. Verify every installed export with genuine Node 24. Run the Swift tests with full Xcode (`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`).
 - Run `bun run check` before release handoff. The release workflow may write only the verified immutable GitHub Release.
 
 <!-- hraness-public-copy:start -->

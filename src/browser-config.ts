@@ -66,9 +66,8 @@ export type BrowserConfig = Readonly<{
   clean?: CleanOptions;
   /** Elements whose text replay masks and whose clicks autocapture drops. */
   privateSelector?: string;
-  /** Replay sampling (0 to 1) and minimum duration. */
+  /** Share of replay-eligible sessions recorded, 0 to 1. Unset: the PostHog project's setting. Minimum duration is a project setting. */
   replaySampleRate?: number;
-  replayMinimumMs?: number;
   /** Inside a native app shell: nothing runs. */
   native?: () => boolean;
   words?: ConsentWords;
@@ -116,6 +115,8 @@ export function posthogOptions(input: Readonly<{
   const { config, policy, caps } = input;
   const cookieless = policy.analytics === "cookieless";
   const privateSelector = config.privateSelector ?? DEFAULT_PRIVATE_SELECTOR;
+  const rate = config.replaySampleRate;
+  const sampleRate = typeof rate === "number" && Number.isFinite(rate) ? Math.min(1, Math.max(0, rate)) : undefined;
   const app = config.preset === "app";
   return {
     api_host: config.apiHost ?? "/ph",
@@ -154,6 +155,7 @@ export function posthogOptions(input: Readonly<{
       recordCrossOriginIframes: false,
       recordHeaders: false,
       recordBody: false,
+      ...(sampleRate === undefined ? {} : { sampleRate }),
     },
     disable_surveys: true,
     advanced_disable_feature_flags: true,

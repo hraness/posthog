@@ -30,7 +30,7 @@ async function setup(env: Record<string, string | undefined> = {}, zone = "Ameri
     zone,
     stderr: (text) => { notices.push(text); },
     fetch: ((_url: string, init?: RequestInit) => {
-      sent.push(JSON.parse(String(init?.body)));
+      sent.push(JSON.parse(init?.body as string));
       return Promise.resolve(new Response(null, { status: 204 }));
     }) as unknown as typeof fetch,
     ...extra,
@@ -104,7 +104,7 @@ describe("CLI telemetry", () => {
   test("never arguments, paths or content: only allowlisted label properties", async () => {
     const { sent, telemetry } = await setup({}, "America/New_York", { events: { "thing made": ["kind"] } });
     telemetry.commandRun("publish ./secret/path --token=abc", true, 10);
-    telemetry.record("cli command run", { command: "publish", ok: true, duration_bucket: "<1s", path: "/Users/someone/secret" } as never);
+    telemetry.record("cli command run", { command: "publish", ok: true, duration_bucket: "<1s", path: "/Users/someone/secret" });
     telemetry.record("thing made", { kind: "Some Free Text" });
     telemetry.record("not an event", { kind: "x" });
     await telemetry.flush();

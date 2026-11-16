@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@hraness/posthog",
+      "name": "@hraness/analytics",
       "dependencies": {
         "posthog-js": "1.449.1",
       },

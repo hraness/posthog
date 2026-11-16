@@ -24,7 +24,7 @@ const config = { token: "public-token", siteId: "example" } as const;
 const recorder = () => {
   const calls: { url: string; body: Record<string, unknown> }[] = [];
   const fetcher = ((url: string, init?: RequestInit) => {
-    calls.push({ url, body: JSON.parse(String(init?.body ?? "null")) as Record<string, unknown> });
+    calls.push({ url, body: JSON.parse((init?.body as string | undefined) ?? "null") as Record<string, unknown> });
     return Promise.resolve(new Response(null, { status: 200 }));
   }) as unknown as typeof fetch;
   return { calls, fetcher };
@@ -46,7 +46,7 @@ describe("the region endpoint", () => {
   });
 
   test("the inline script cannot close its tag", () => {
-    expect(regionScript({ ...regionOf(new Headers({ "cf-ipcountry": "US" })), country: "</script>" as never })).not.toContain("</script>");
+    expect(regionScript({ ...regionOf(new Headers({ "cf-ipcountry": "US" })), country: "</script>" })).not.toContain("</script>");
   });
 });
 
