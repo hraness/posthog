@@ -272,3 +272,22 @@ describe("route matching", () => {
     expect(routePattern("/accounts", patterns)).toBe("/accounts");
   });
 });
+
+describe("keys that carry addresses", () => {
+  test("heatmap data is keyed by the cleaned address, merging collapsed keys", async () => {
+    const { cleanProps } = await import("./attribution.js");
+    const input: Record<string, unknown> = {
+      $heatmap_data: {
+        "https://example.com/p?secret=1#a": [{ x: 1 }],
+        "https://example.com/p#b": [{ x: 2 }],
+        "/u/probe@example.com?ref=hn": [{ x: 3 }],
+      },
+      plain_key: 1,
+    };
+    const cleaned = cleanProps(input);
+    expect(cleaned).toEqual({
+      $heatmap_data: { "https://example.com/p": [{ x: 1 }, { x: 2 }], "[email]?ref=hn": [{ x: 3 }] },
+      plain_key: 1,
+    });
+  });
+});

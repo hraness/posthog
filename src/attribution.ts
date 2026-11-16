@@ -436,6 +436,12 @@ const plain = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null
   && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
+/** An autocapture chain with each `href` cleaned like an address (relative ones too) and emails cut. */
+function cleanChain(chain: string, routes: readonly RoutePattern[]): string {
+  return cleanText(chain.replace(/((?:attr__)?href=")([^"]*)"/gu, (_whole, name: string, href: string) => `${name}${cleanUrl(href, routes)}"`), routes)
+    .replace(EMAIL, "[email]");
+}
+
 function cleanValue(key: string, value: unknown, options: CleanOptions, depth: number): unknown {
   if (CLICK_FIELD.test(key)) return undefined;
   if (key === "first_source" || CAMPAIGN_FIELD.test(key)) return campaignLabel(value);
@@ -443,6 +449,7 @@ function cleanValue(key: string, value: unknown, options: CleanOptions, depth: n
   const routes = options.routes ?? [];
   if (typeof value === "string") {
     if (/referrer/iu.test(key)) return value === "$direct" ? value : referrerSite(value);
+    if (key === "$elements_chain") return cleanChain(value, routes);
     const text = LINKISH.test(key) && !/\s/u.test(value)
       ? (key.toLowerCase().includes("pathname") ? routePattern(value, routes) : cleanText(cleanUrl(value, routes), routes))
       : cleanText(value, routes);
@@ -453,13 +460,36 @@ function cleanValue(key: string, value: unknown, options: CleanOptions, depth: n
   return plain(value) ? cleanBag(value, options, depth + 1, false) : value;
 }
 
+/**
+ * A key as kept. Plain names pass; a key that is an address (PostHog keys `$heatmap_data` by the page URL) is cleaned
+ * like `$current_url`, and any other key loses emails and addresses in it.
+ */
+function cleanKey(key: string, routes: readonly RoutePattern[]): string {
+  if (/^[\w$.:-]*$/u.test(key)) return key;
+  const text = /^(?:https?:\/\/|\/)\S*$/iu.test(key) ? cleanUrl(key, routes) : cleanText(key, routes);
+  return text.replace(EMAIL, "[email]");
+}
+
+/** Two values whose keys cleaned to the same key: lists join, bags merge, otherwise the first stays. */
+function mergeValues(first: unknown, second: unknown): unknown {
+  if (Array.isArray(first) && Array.isArray(second)) return [...(first as unknown[]), ...(second as unknown[])];
+  if (plain(first) && plain(second)) {
+    const out: Record<string, unknown> = { ...first };
+    for (const [key, value] of Object.entries(second)) out[key] = Object.hasOwn(out, key) ? mergeValues(out[key], value) : value;
+    return out;
+  }
+  return first;
+}
+
 function cleanBag(props: Record<string, unknown>, options: CleanOptions, depth: number, top: boolean): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const allow = options.allowProps === undefined ? undefined : new Set(options.allowProps);
-  for (const [key, value] of Object.entries(props)) {
-    if (top && allow !== undefined && !key.startsWith("$") && !allow.has(key)) continue;
+  for (const [raw, value] of Object.entries(props)) {
+    if (top && allow !== undefined && !raw.startsWith("$") && !allow.has(raw)) continue;
+    const key = cleanKey(raw, options.routes ?? []);
     const cleaned = cleanValue(key, value, options, depth);
-    if (cleaned !== undefined) out[key] = cleaned;
+    if (cleaned === undefined) continue;
+    out[key] = Object.hasOwn(out, key) ? mergeValues(out[key], cleaned) : cleaned;
   }
   return out;
 }
