@@ -130,7 +130,8 @@ export function withoutTracking(href: string): string | null {
       changed = true;
     }
   }
-  return changed ? url.pathname + url.search + url.hash : null;
+  // A path that starts with "//" would read as another host in history.replaceState.
+  return changed ? url.pathname.replace(/^\/{2,}/u, "/") + url.search + url.hash : null;
 }
 
 /**
@@ -459,6 +460,6 @@ function cleanBag(props: Record<string, unknown>, options: CleanOptions, depth: 
 }
 
 /** Every property at any depth cleaned: addresses, referrers, labels, click IDs and emails. */
-export function cleanProps<T extends Record<string, unknown>>(props: T, options: CleanOptions = {}): T {
-  return cleanBag(props, options, 0, true) as T;
+export function cleanProps<T extends Record<string, unknown>>(props: T, options: CleanOptions = {}): Partial<T> {
+  return cleanBag(props, options, 0, true) as Partial<T>;
 }

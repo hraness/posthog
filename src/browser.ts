@@ -289,11 +289,11 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     Object.assign(base, arrivalProps(arrival, config.channel ?? {}));
 
     const [{ default: posthog }] = await Promise.all([
-      import("posthog-js/dist/module.no-external"),
-      import("posthog-js/dist/exception-autocapture"),
-      caps.vitalsAttribution ? import("posthog-js/dist/web-vitals-with-attribution") : import("posthog-js/dist/web-vitals"),
-      caps.heatmaps ? import("posthog-js/dist/dead-clicks-autocapture") : Promise.resolve(),
-      caps.replay ? import("posthog-js/dist/posthog-recorder") : Promise.resolve(),
+      import("posthog-js/dist/module.no-external.js"),
+      import("posthog-js/dist/exception-autocapture.js"),
+      caps.vitalsAttribution ? import("posthog-js/dist/web-vitals-with-attribution.js") : import("posthog-js/dist/web-vitals.js"),
+      caps.heatmaps ? import("posthog-js/dist/dead-clicks-autocapture.js") : Promise.resolve(),
+      caps.replay ? import("posthog-js/dist/posthog-recorder.js") : Promise.resolve(),
     ]);
     if (!on) return;
     const ph = posthog as unknown as PostHogLike;

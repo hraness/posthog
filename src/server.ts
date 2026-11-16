@@ -136,8 +136,9 @@ export function money(amount: unknown, currency: unknown): { amount?: number; cu
   return { currency: code, ...(minor === undefined ? {} : { amount: minor / 10 ** decimalsOf(code) }) };
 }
 
-const id = (value: unknown): string | undefined =>
-  typeof value === "string" && value.length > 0 && value.length <= 255 ? value : id(bag(value)?.id);
+const plainId = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 && value.length <= 255 ? value : undefined);
+/** A Stripe ID, given either as the ID or as the expanded object carrying it. */
+const id = (value: unknown): string | undefined => plainId(value) ?? plainId(bag(value)?.id);
 const interval = (value: unknown) => (value === "day" || value === "week" || value === "month" || value === "year" ? value : undefined);
 function recurring(object: Bag): string | undefined {
   const items = bag(object.items)?.data;

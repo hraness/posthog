@@ -1,112 +1,51 @@
 import { readdir, readFile } from "node:fs/promises";
 
+// Static runtime imports each published entry may have. Everything else is inlined from src/.
 const allowedImports = new Map<string, ReadonlySet<string>>([
-  ["site", new Set()],
-  ["event", new Set()],
-  ["traffic", new Set()],
-  ["consent", new Set()],
-  ["client", new Set(["./consent.js", "posthog-js", "posthog-js/dist/web-vitals.js"])],
-  ["react", new Set(["./client.js", "react", "react/jsx-runtime"])],
-  ["server", new Set(["posthog-node"])],
-  ["next-config", new Set(["@posthog/nextjs-config"])],
-  [
-    "testing",
-    new Set([
-      "node:child_process",
-      "node:fs",
-      "node:module",
-      "node:url",
-      "node:zlib",
-      "posthog-js",
-      "posthog-js/dist/web-vitals.js",
-    ]),
-  ],
-  ["testing-harness", new Set(["node:module"])],
+  ["index", new Set()],
+  ["policy", new Set()],
+  ["events", new Set()],
+  ["attribution", new Set()],
+  ["browser", new Set()],
+  ["meta", new Set()],
+  ["server", new Set()],
+  ["cli", new Set(["node:fs/promises", "node:os", "node:path"])],
+]);
+// The browser entry loads PostHog only after the page has drawn, and only from the pinned package: never a remote script.
+const browserDynamic = new Set([
+  "posthog-js/dist/module.no-external.js",
+  "posthog-js/dist/exception-autocapture.js",
+  "posthog-js/dist/web-vitals.js",
+  "posthog-js/dist/web-vitals-with-attribution.js",
+  "posthog-js/dist/dead-clicks-autocapture.js",
+  "posthog-js/dist/posthog-recorder.js",
 ]);
 
-const staticImport = /(?:from\s+|import\s*)["']([^"']+)["']/gu;
-const clientDirective = /(["'])use client\1\s*;/gu;
-
-function assertClientBoundary(entry: string, source: string): void {
-  if (!source.startsWith('"use client";\n')) {
-    throw new Error(`${entry} does not start with its Next.js client boundary`);
-  }
-  if ([...source.matchAll(clientDirective)].length !== 1) {
-    throw new Error(`${entry} must contain exactly one Next.js client boundary`);
-  }
-}
+const staticImport = /(?:from\s+|^import\s*)["']([^"']+)["']/gmu;
+const dynamicImport = /import\(\s*["']([^"']+)["']\s*\)/gu;
 
 for (const [entry, allowed] of allowedImports) {
   const source = await readFile(`dist/${entry}.js`, "utf8");
-  const imports = [...source.matchAll(staticImport)].map((match) => match[1]);
-  for (const specifier of imports) {
-    if (specifier === undefined || !allowed.has(specifier)) {
-      throw new Error(`${entry} has an unexpected runtime import: ${String(specifier)}`);
+  for (const match of source.matchAll(staticImport)) {
+    const specifier = match[1];
+    if (specifier === undefined || !allowed.has(specifier)) throw new Error(`${entry} has an unexpected runtime import: ${String(specifier)}`);
+  }
+  for (const match of source.matchAll(dynamicImport)) {
+    const specifier = match[1];
+    if (entry !== "browser" || specifier === undefined || !browserDynamic.has(specifier)) {
+      throw new Error(`${entry} has an unexpected dynamic import: ${String(specifier)}`);
     }
   }
+  if (entry !== "cli" && source.includes("node:")) throw new Error(`${entry} crosses into Node through node:`);
+  if (entry !== "browser" && source.includes("posthog-js")) throw new Error(`${entry} is not provider-neutral: found posthog-js`);
 }
 
-const browserEntries = ["site", "event", "traffic", "consent", "client", "react"];
-for (const entry of browserEntries) {
-  const source = await readFile(`dist/${entry}.js`, "utf8");
-  for (const forbidden of ["posthog-node", "@posthog/nextjs-config", "node:"]) {
-    if (source.includes(forbidden)) {
-      throw new Error(`${entry} crosses the browser boundary through ${forbidden}`);
-    }
-  }
+const browser = await readFile("dist/browser.js", "utf8");
+for (const required of ["disable_external_dependency_loading: true", 'persistence: "memory"', 'person_profiles: "identified_only"']) {
+  if (!browser.includes(required)) throw new Error(`browser entry lost ${required}`);
 }
+if (/connect\.facebook\.net/u.test(browser)) throw new Error("browser entry must not load Meta itself; compose ./meta in onAds");
 
-for (const entry of ["client", "react"]) {
-  const source = await readFile(`dist/${entry}.js`, "utf8");
-  assertClientBoundary(entry, source);
-}
-
-const clientSource = await readFile("dist/client.js", "utf8");
-const reactSource = await readFile("dist/react.js", "utf8");
-if (!clientSource.includes('from "./consent.js"') || clientSource.includes("let browserConsent")) {
-  throw new Error("client must reuse the provider-free consent entry singleton");
-}
-if (!/import\s*["']posthog-js\/dist\/web-vitals\.js["'];/u.test(clientSource)) {
-  throw new Error("client must bundle Web Vitals callbacks instead of loading a remote script");
-}
-if (!clientSource.includes('process.env["NODE_ENV"] === "production"')) {
-  throw new Error("client does not preserve the runtime production eligibility check");
-}
-if (!reactSource.includes('from "./client.js"')) {
-  throw new Error("react does not reuse the client entry singleton");
-}
-if (!clientSource.includes("activeSiteId") || reactSource.includes("activeSiteId")) {
-  throw new Error("client and react do not have exactly one active-site state owner");
-}
-
-const harnessSource = await readFile("dist/testing-harness.js", "utf8");
-if (!/await import\(["']posthog-js["']\)/u.test(harnessSource)
-  || !/await import\(["']\.\/client\.js["']\)/u.test(harnessSource)) {
-  throw new Error("testing-harness must load posthog-js only after defining browser globals");
-}
-
-const expectedArtifacts = new Set(
-  [...allowedImports.keys()].flatMap((entry) => [`${entry}.js`, `${entry}.js.map`]),
-);
-const unexpectedArtifacts = (await readdir("dist"))
-  .filter((artifact) => !expectedArtifacts.has(artifact));
-if (unexpectedArtifacts.length > 0) {
-  throw new Error(`build emitted unstable shared artifacts: ${unexpectedArtifacts.join(", ")}`);
-}
-
-const pureEntries = ["site", "event", "traffic", "consent"];
-for (const entry of pureEntries) {
-  const source = await readFile(`dist/${entry}.js`, "utf8");
-  for (const forbidden of ["posthog-js", "posthog-node", "react", "next"]) {
-    if (source.includes(forbidden)) {
-      throw new Error(`${entry} is not provider-neutral: found ${forbidden}`);
-    }
-  }
-}
-
-const eventSource = await readFile("dist/event.js", "utf8");
-for (const forbidden of ["HTMLAnchorElement", "HTMLElement", "instanceof Element"]) {
-  if (eventSource.includes(forbidden)) {
-    throw new Error(`event retains browser-only delegated parsing: ${forbidden}`);
-  }
-}
+const expected = new Set([...allowedImports.keys()].flatMap((entry) => [`${entry}.js`, `${entry}.js.map`]));
+const unexpected = (await readdir("dist")).filter((artifact) => !expected.has(artifact));
+if (unexpected.length > 0) throw new Error(`build emitted unexpected artifacts: ${unexpected.join(", ")}`);
