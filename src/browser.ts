@@ -7,7 +7,7 @@ import {
   afterFirstPageview,
   arrivalOf,
   arrivalProps,
-  cleanProps,
+  cleanEvent,
   firstTouchProps,
   parseFirstTouch,
   refOf,
@@ -308,8 +308,12 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
         if (event.event !== undefined && ["$autocapture", "$rageclick", "$dead_click"].includes(event.event) && fromPrivateElement(event.properties)) return null;
         const kept = isPrivate(location.pathname) ? onPrivatePath(event) : event;
         if (kept === null) return null;
-        const own = config.clean?.allowProps === undefined ? kept.properties : cleanProps(kept.properties ?? {}, { allowProps: [...config.clean.allowProps, ...Object.keys(facts)] });
-        const cleaned = cleanProps({ ...kept, properties: { ...own, ...facts } }, { routes: [...(config.clean?.routes ?? []), ...(config.privatePaths ?? [])] });
+        const allowProps = config.clean?.allowProps;
+        const routes = [...(config.clean?.routes ?? []), ...(config.privatePaths ?? [])];
+        const cleaned = cleanEvent(
+          { ...kept, properties: { ...kept.properties, ...facts } },
+          allowProps === undefined ? { routes } : { routes, allowProps: [...allowProps, ...Object.keys(facts)] },
+        );
         queueMicrotask(() => { tidy(event.event); });
         return cleaned;
       },

@@ -146,7 +146,8 @@ describe("region address, ads address and private paths", () => {
     expect(onPrivatePath({ event: "$autocapture", properties: { $elements_chain: "div.card;body" } })).toBeNull();
     expect(onPrivatePath({ event: "$autocapture", properties: {} })).toBeNull();
     const kept = onPrivatePath({ event: "$autocapture", properties: { $elements_chain: 'span:text="Jane";a.nav:attr__href="/x"', $el_text: "Jane", $title: "Jane's account" } });
-    expect(kept?.properties).toEqual({ $elements_chain: 'span:;a.nav:attr__href="/x"' });
+    expect(kept?.properties).toEqual({ $elements_chain: "span:;a.nav:" });
+    expect(onPrivatePath({ event: "$pageview", properties: { title: "Jane", $title: "Jane", $page_title: "Jane" } })?.properties).toEqual({});
     expect(onPrivatePath({ event: "$autocapture", properties: { $elements_chain: 'div:attr__data-ph="save"' } })).not.toBeNull();
     expect(onPrivatePath({ event: "$pageview", properties: { $title: "Secret", $current_url: "/account" } })?.properties).toEqual({ $current_url: "/account" });
   });

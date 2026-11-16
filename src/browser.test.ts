@@ -294,6 +294,57 @@ describe("the browser client", () => {
     expect(tab.jar.has("_fbp") || tab.jar.has("_fbc")).toBe(false);
   });
 
+  test("on a private path no title, link, label or text naming the content reaches PostHog", async () => {
+    const tab = page({ href: "https://example.com/", zone: "America/New_York", region: { country: "US", region_group: "us", gpc: false } });
+    createAnalytics({ ...base, preset: "marketing", privatePaths: ["/library/*"] });
+    await settle();
+    const ph = latest();
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    tab.history.pushState(null, "", "/library/secret-song");
+    const start = ph.sent.length;
+    const here = "https://example.com/library/secret-song";
+    capture("$pageview", { $current_url: here, $pathname: "/library/secret-song", title: "Secret Song", $title: "Secret Song" });
+    capture("$autocapture", {
+      $current_url: here,
+      $elements_chain: 'a.track:attr__href="/library/secret-song/2"attr__aria-label="Play Secret Song"attr__title="Secret Song"href="/library/secret-song/2"text="Secret Song"nth-child="1";li:attr__id="Secret Song"attr_id="Secret Song"',
+      $elements: [{ tag_name: "a", attr__href: "/library/secret-song/2", "attr__aria-label": "Play Secret Song" }],
+      $el_text: "Secret Song",
+      $external_click_url: "https://other.example/secret-song",
+    });
+    capture("$autocapture", {
+      $current_url: here,
+      $elements_chain: 'button:attr__data-ph="save"attr__name="Secret Song"attr__value="Secret Song"attr__alt="Secret Song"nth-child="2"',
+    });
+    const sent = ph.sent.slice(start);
+    expect(sent.every((event) => event !== null)).toBe(true);
+    expect(sent[2]?.properties.$elements_chain).toContain('attr__data-ph="save"');
+    const seen: string[] = [];
+    const walk = (value: unknown) => {
+      if (typeof value === "string") seen.push(value);
+      else if (Array.isArray(value)) for (const item of value) walk(item);
+      else if (typeof value === "object" && value !== null) for (const [key, item] of Object.entries(value)) { seen.push(key); walk(item); }
+    };
+    walk(sent);
+    for (const text of seen) {
+      expect(text).not.toContain("Secret Song");
+      expect(text).not.toContain("secret-song");
+    }
+  });
+
+  test("clean.allowProps limits properties, never the event itself", async () => {
+    page({ href: "https://example.com/", zone: "America/New_York", region: { country: "US", region_group: "us", gpc: false } });
+    createAnalytics({ ...base, preset: "marketing", clean: { allowProps: ["cta"] } });
+    await settle();
+    const ph = latest();
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    capture("$pageview", { title: "x", cta: "hero", other: "drop me", $current_url: "https://example.com/" });
+    const sent = ph.sent.at(-1);
+    expect(sent?.event).toBe("$pageview");
+    expect(sent?.properties).toMatchObject({ cta: "hero", site_id: "example", $current_url: "https://example.com/" });
+    expect(sent?.properties).not.toHaveProperty("other");
+    expect(sent?.properties).not.toHaveProperty("title");
+  });
+
   test("no email, fragment or unlisted parameter reaches PostHog in any key or value", async () => {
     page({ href: "https://example.com/p?secret=1&ref=hn#frag", zone: "America/New_York", region: { country: "US", region_group: "us", gpc: false } });
     createAnalytics({ ...base, preset: "marketing" });

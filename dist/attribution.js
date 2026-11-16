@@ -414,6 +414,11 @@ function cleanBag(props, options, depth, top) {
   }
   return out;
 }
+function cleanEvent(event, options = {}) {
+  const { properties, ...rest } = event;
+  const fields = cleanBag(rest, options.routes === undefined ? {} : { routes: options.routes }, 0, false);
+  return { ...fields, properties: cleanBag(properties ?? {}, options, 0, true) };
+}
 function cleanProps(props, options = {}) {
   return cleanBag(props, options, 0, true);
 }
@@ -433,6 +438,7 @@ export {
   cleanUrl,
   cleanText,
   cleanProps,
+  cleanEvent,
   channelOf,
   carryRef,
   campaignLabel,
@@ -446,4 +452,4 @@ export {
   CAMPAIGNS
 };
 
-//# debugId=4C0DDC4914B6CB8464756E2164756E21
+//# debugId=2F8E7CAD59E07FFB64756E2164756E21

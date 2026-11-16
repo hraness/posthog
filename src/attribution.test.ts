@@ -291,3 +291,16 @@ describe("keys that carry addresses", () => {
     });
   });
 });
+
+describe("whole events", () => {
+  test("allowProps applies to properties only; the event's own fields stay", async () => {
+    const { cleanEvent } = await import("./attribution.js");
+    const event = { event: "$pageview", uuid: "u-1", timestamp: "2026-11-16T00:00:00Z", properties: { title: "x", cta: "hero", $current_url: "https://example.com/?secret=1#f" } };
+    expect(cleanEvent(event, { allowProps: ["cta"] })).toEqual({
+      event: "$pageview",
+      uuid: "u-1",
+      timestamp: "2026-11-16T00:00:00Z",
+      properties: { cta: "hero", $current_url: "https://example.com/" },
+    });
+  });
+});
