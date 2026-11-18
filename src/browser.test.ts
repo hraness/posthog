@@ -49,7 +49,7 @@ await mock.module("posthog-js/dist/module.no-external.js", () => ({ default: roo
 for (const part of ["exception-autocapture", "web-vitals", "web-vitals-with-attribution", "dead-clicks-autocapture", "posthog-recorder"]) {
   await mock.module(`posthog-js/dist/${part}.js`, () => ({}));
 }
-const { ARRIVAL_SCRIPT, createAnalytics, snapshotArrival } = await import("./browser.js");
+const { ARRIVAL_SCRIPT, assign, createAnalytics, snapshotArrival } = await import("./browser.js");
 
 class Element {
   children: Element[] = [];
@@ -105,6 +105,7 @@ afterEach(() => {
   saved.clear();
   instances.length = 0;
   Reflect.deleteProperty(globalThis, "__hranessArrival");
+  Reflect.deleteProperty(globalThis, "__hranessExperiments");
 });
 
 function page(options: PageOptions) {
@@ -505,6 +506,7 @@ describe("the browser client", () => {
       Object.assign(globalThis, { __hranessArrival: bad });
       expect(snapshotArrival()).toEqual({ path: "/now", search: "", referrer: "" });
       Reflect.deleteProperty(globalThis, "__hranessArrival");
+  Reflect.deleteProperty(globalThis, "__hranessExperiments");
     }
   });
 
@@ -578,6 +580,59 @@ describe("the browser client", () => {
     expect(() => createAnalytics({ ...base, preset: "marketing" })).not.toThrow();
     expect(tab.domLoaded).toHaveLength(1);
   });
+
+  test("an assignment made before the client is reported once: $feature/<key> on later events, one exposure", async () => {
+    page({ href: "https://example.com/?exp-other=b", zone: "America/New_York", regionUrl: false });
+    const header = { key: "header-cta", variants: ["control", "free"] } as const;
+    const made = assign(header, { siteId: "example" });
+    const forced = assign({ key: "other", variants: ["a", "b"] }, { siteId: "example" });
+    expect(forced.source).toBe("override");
+    const analytics = createAnalytics({ ...base, preset: "marketing", regionUrl: false, clean: { allowProps: ["cta"] } });
+    analytics.expose(made);
+    analytics.expose(forced);
+    await settle();
+    analytics.expose(assign(header, { siteId: "example" }));
+    analytics.track("cta clicked", { cta: "download", placement: "header" });
+    const sent = latest().sent.filter((event) => event !== null);
+    const exposures = sent.filter((event) => event.event === "$feature_flag_called");
+    expect(exposures).toHaveLength(1);
+    expect(exposures[0]?.properties).toMatchObject({ $feature_flag: "header-cta", $feature_flag_response: made.variant, "$feature/header-cta": made.variant });
+    expect(sent.at(-1)?.properties).toMatchObject({ "$feature/header-cta": made.variant, cta: "download" });
+    // The override is never reported, so QA visits stay out of the results.
+    expect(sent.some((event) => event.properties.$feature_flag === "other" || "$feature/other" in event.properties)).toBe(false);
+  });
+
+  test("the client adopts the page's experiment ID when it starts persistent analytics, so the variant holds", async () => {
+    const tab = page({ href: "https://example.com/", zone: "America/New_York", regionUrl: false });
+    const made = assign({ key: "header-cta", variants: ["control", "free"] }, { siteId: "example" });
+    expect(made.source).toBe("page");
+    createAnalytics({ ...base, preset: "marketing", regionUrl: false });
+    await settle();
+    const id = tab.jar.get("example-id");
+    expect(id).toBe((globalThis as { __hranessExperiments?: { id?: string } }).__hranessExperiments?.id);
+    Reflect.deleteProperty(globalThis, "__hranessExperiments");
+    expect(assign({ key: "header-cta", variants: ["control", "free"] }, { siteId: "example" })).toEqual({ ...made, source: "id" });
+  });
+
+  test("a cookieless visit reports the exposure and stores nothing; an EU yes reports it again", async () => {
+    const eu = { country: "DE", region_group: "eu", gpc: false } as const;
+    const tab = page({ href: "https://example.com/", zone: "Europe/Berlin", region: eu });
+    const made = assign({ key: "header-cta", variants: ["control", "free"] }, { siteId: "example" });
+    const analytics = createAnalytics({ ...base, preset: "marketing" });
+    await settle();
+    expect(latest().options.cookieless_mode).toBe("always");
+    expect(latest().sent.filter((event) => event?.event === "$feature_flag_called").at(-1)?.properties).toMatchObject({ $feature_flag_response: made.variant });
+    expect(tab.jar.has("example-id")).toBe(false);
+    expect(tab.local.size).toBe(0);
+
+    // An EU yes: the persistent client reports the exposure again under its new ID, the page's experiment ID.
+    analytics.choose("all", "yes");
+    await settle();
+    const second = latest();
+    expect(second.name).toBe("persistent");
+    expect(second.sent.filter((event) => event?.event === "$feature_flag_called").at(-1)?.properties).toMatchObject({ $feature_flag: "header-cta", $feature_flag_response: made.variant });
+    expect(tab.jar.get("example-id")).toBe((globalThis as { __hranessExperiments?: { id?: string } }).__hranessExperiments?.id);
+  });
 });
 
 function afterEachReset() {
@@ -587,4 +642,5 @@ function afterEachReset() {
   }
   saved.clear();
   Reflect.deleteProperty(globalThis, "__hranessArrival");
+  Reflect.deleteProperty(globalThis, "__hranessExperiments");
 }

@@ -52,7 +52,7 @@ This repository does not publish the package to npm. Pin the immutable GitHub Re
 ```json
 {
   "dependencies": {
-    "@hraness/analytics": "https://github.com/hraness/posthog/releases/download/v1.0.3/hraness-analytics-1.0.3.tgz"
+    "@hraness/analytics": "https://github.com/hraness/posthog/releases/download/v1.1.0/hraness-analytics-1.1.0.tgz"
   }
 }
 ```
@@ -60,10 +60,10 @@ This repository does not publish the package to npm. Pin the immutable GitHub Re
 Each release also carries a `SHA256SUMS` file. The package needs Node 24 or later on the server and pins
 `posthog-js` 1.449.1 for the browser.
 
-For a Mac or iOS app, add the repository as a Swift package from the `v1.0.3` tag:
+For a Mac or iOS app, add the repository as a Swift package from the `v1.1.0` tag:
 
 ```swift
-.package(url: "https://github.com/hraness/posthog.git", from: "1.0.3")
+.package(url: "https://github.com/hraness/posthog.git", from: "1.1.0")
 ```
 
 The Swift package ([`Package.swift`](Package.swift)) depends only on Foundation, plus AppKit for the consent sheet.
@@ -77,6 +77,7 @@ The Swift package ([`Package.swift`](Package.swift)) depends only on Foundation,
 | `@hraness/analytics/events` | anywhere | The shared event names and their property types, `daysBucket`, `durationBucket`, `MILESTONES`. |
 | `@hraness/analytics/attribution` | anywhere | `channelOf`, `refLabel`, `remember`, `firstTouchProps`, `withoutTracking`, `carryRef`, `cleanUrl`, `cleanProps`. |
 | `@hraness/analytics/browser` | browser | `createAnalytics` and the option helpers it uses. |
+| `@hraness/analytics/experiment` | browser, before the client | `assign`, `experimentScript`, and the `Experiment` and `Assignment` types. No imports. |
 | `@hraness/analytics/meta` | browser and server | `startPixel`, `adsAllowed`, `trackForServer`, `capiEvent`, `sendCapi`, `hashEmail`, `readAds`. |
 | `@hraness/analytics/server` | Workers, edge, Node | `regionHandler`, `capture`, `accountDistinctId`, `captureBilling`, `wireHandler`, `downloadServed`, `deletePerson`. |
 | `@hraness/analytics/cli` | Node | `createTelemetry`. |
@@ -127,6 +128,7 @@ runs inside a native shell. Its methods:
 - `choose(scope, choice)` records the banner's or a settings toggle's answer.
 - `privacyChoices()` is the handler for the "Your Privacy Choices" link.
 - `distinctId()`, `firstRef()` and `carry()` return what to hand to checkout or a download link.
+- `expose(assignment)` reports an experiment variant the page showed. See [Experiments](#experiments).
 - `policy()` and `counting()` report what the page is allowed to do.
 
 ### Configuration
@@ -155,6 +157,53 @@ runs inside a native shell. Its methods:
 | `privacyHref` | none | Link to your privacy page from the banner. |
 | `onAds` / `onAdsOff` | none | Called when ads become allowed and when they must stop. Start the Meta Pixel here with `startPixel(browserPage(href), ...)`, where `href` is the page address with launch tags cut. |
 | `askDelayMs` | `2500` | Delay before the banner appears. |
+
+### Experiments
+
+`@hraness/analytics/experiment` picks an A/B variant while the page draws, before the client loads, and the client
+reports it in the form PostHog Experiments reads. Assignment is local: no PostHog feature flag is evaluated and the
+page makes no extra request. The module has no imports, and `assign` is about 2 KB once minified, so it fits in a
+page's first script. Its source is [`src/experiment.ts`](src/experiment.ts).
+
+```ts
+import { assign } from "@hraness/analytics/experiment";
+
+const HEADER_CTA = { key: "header-cta", variants: ["control", "free"] } as const;
+const { variant } = assign(HEADER_CTA, { siteId: "example" });
+document.documentElement.dataset.expHeaderCta = variant;
+```
+
+On a server-rendered page, render every variant and let CSS choose. `experimentScript(experiments, site)` returns an
+inline `<head>` script that sets `data-exp-<key>="<variant>"` on `<html>` before the first paint:
+
+```tsx
+<script dangerouslySetInnerHTML={{ __html: experimentScript([HEADER_CTA], { siteId: "example" }) }} />
+// CSS: html:not([data-exp-header-cta="free"]) .cta-free, html[data-exp-header-cta="free"] .cta-control { display: none }
+```
+
+How a variant is chosen:
+
+- The variant is a hash of the experiment key and the visitor's first-party ID, the one `createAnalytics` keeps in
+  persistent mode. A returning visitor sees the same variant on every page.
+- A visitor with no stored ID, or one who answered no to analytics, gets a variant for this page only, from a random
+  ID held in memory. Nothing is written. If the client then starts persistent analytics, it adopts that ID, so the
+  next page shows the same variant. A cookieless visitor (in Europe, before a yes) can see a different variant on each
+  page, and PostHog leaves visitors exposed to two variants out of the results by default. Expect that noise in
+  European traffic.
+- `weights` sets each variant's share, one non-negative number per variant. Without it the split is equal.
+- `?exp-<key>=<variant>` forces a variant for QA. A forced variant is never reported, and the query parameter never
+  reaches PostHog because cleaned addresses keep only `utm_*`, `ref` and `via`.
+- Pass the same `siteId` (and `storagePrefix`, if you set one) as `createAnalytics`, so both read the same ID.
+- Keys and variants use lower-case letters, digits, `-` and `_`. An invalid experiment, or a call outside a browser,
+  returns the first variant with source `fallback`, which is never reported.
+
+`createAnalytics` reports every assignment made on the page before it started. Call `analytics.expose(assignment)`
+for one made later. Each experiment is reported once per page: `$feature/<key>` is added to every later event, and one
+`$feature_flag_called` event carries `$feature_flag` (the key) and `$feature_flag_response` (the variant). After a
+European yes or `reset()` the visitor has a new distinct ID, and the client sends the exposure again under it. That event
+is PostHog's default exposure, so create the experiment in PostHog with the same key and variant names, the first
+variant named `control`, and leave the exposure criteria at their default. The package never asks PostHog to evaluate
+the experiment's flag.
 
 ### What leaves the page
 
