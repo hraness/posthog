@@ -63,6 +63,7 @@ const localReferences = [
   "src/browser.ts",
   "src/cli.ts",
   "src/events.ts",
+  "src/experiment.ts",
   "src/meta.ts",
   "src/policy.ts",
   "src/server.ts",

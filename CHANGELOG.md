@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+- Added: `@hraness/analytics/experiment`, local A/B assignment that runs before the client loads. `assign` hashes the experiment key with the stored first-party ID, falls back to a per-page ID without storing anything, takes optional weights and a `?exp-<key>=<variant>` QA override. `experimentScript` returns an inline `<head>` script that sets `data-exp-<key>` on `<html>` before the first paint.
+- Added: `expose(assignment)` on the browser client. Each experiment is reported once per page as `$feature_flag_called` with `$feature_flag` and `$feature_flag_response`, and `$feature/<key>` rides on every later event, so PostHog Experiments reads it with no flag evaluation. Assignments made before `createAnalytics` are reported without a call, and exposures are sent again after a European yes changes the distinct ID.
+- Changed: when persistent analytics starts with no stored ID, the client adopts the ID an experiment on the page used, so the variant holds on the next page.
+
 ## 1.0.3
 
 - Fixed: `first_landing` kept the address a visitor arrived at, which could name a private item. A landing that matches `privatePaths` or `clean.routes` is now kept as its route pattern, and a first-touch record saved by an earlier version is reduced when it is read.

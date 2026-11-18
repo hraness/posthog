@@ -40,9 +40,18 @@ import {
   type ConsentWords,
 } from "./browser-config.js";
 import { MILESTONES, SCHEMA, type EventName, type Props, type PropsOf } from "./events.js";
+import { heldExperiments, parseAssignment, type Assignment } from "./experiment.js";
 import { parseRegionResponse, regionPolicy, type RegionPolicy } from "./policy.js";
 
 export * from "./browser-config.js";
+export {
+  assign,
+  experimentScript,
+  type Assignment,
+  type AssignmentSource,
+  type Experiment,
+  type ExperimentSite,
+} from "./experiment.js";
 export {
   afterFirstPageview,
   ARRIVAL_SCRIPT,
@@ -81,6 +90,12 @@ export type Analytics<Extra extends string = never> = Readonly<{
   /** Facts that ride on every later event on this page (`plan`, say). */
   describe(props: Props): void;
   /**
+   * Reports an `assign` result once per page: `$feature/<key>` rides on every later event and one
+   * `$feature_flag_called` goes out, which PostHog Experiments counts as the exposure. Overrides and fallbacks are
+   * not reported. Assignments made before `createAnalytics` are reported without a call.
+   */
+  expose(assignment: Assignment): void;
+  /**
    * Links this browser to a signed-in account by an opaque ID (an HMAC of the account ID, never an email). Sets the
    * first-touch set on the person once. Only in persistent mode; returns whether it did.
    */
@@ -106,6 +121,7 @@ const OFF: Analytics<string> = {
   track() {},
   trackNth() {},
   describe() {},
+  expose() {},
   identify: () => false,
   reset() {},
   choose() {},
@@ -186,6 +202,15 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   let distinct: string | undefined;
   let identified: string | undefined;
   const counts = new Map<string, number>();
+  // Experiment key to variant, reported on this page.
+  const exposed = new Map<string, string>();
+  /**
+   * Reports each exposure again under the persistent ID an EU yes starts, so later events still count. That ID is the
+   * one the page assigned with. A sign-out's new ID is not: it may hash to another variant, so it is not reported.
+   */
+  const reexpose = () => {
+    for (const [key, variant] of exposed) send("$feature_flag_called", { $feature_flag: key, $feature_flag_response: variant });
+  };
   let adsStarted = false;
 
   function storedChoices(): DatedChoices {
@@ -284,7 +309,8 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     // A record from before 1.0.3 may hold a private landing as it was.
     const before = kept === undefined ? undefined : { ...kept, landing: routePattern(kept.landing, routes) };
     const session = sessionFor(stored?.session, now);
-    distinct = visitId(stored?.id) ?? visitId(readCookie(keys.id)) ?? crypto.randomUUID();
+    // The ID an experiment on this page was assigned with, when there was none stored, so the variant holds.
+    distinct = visitId(stored?.id) ?? visitId(readCookie(keys.id)) ?? visitId(heldExperiments().id) ?? crypto.randomUUID();
     identified = accountId(stored?.account);
     touch = remember(before, new Date(now), arrival, {
       surface: String(base.surface),
@@ -386,6 +412,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     old.set_config({ autocapture: false, capture_pageview: false, capture_pageleave: false, rageclick: false, capture_dead_clicks: false, capture_heatmaps: false });
     client = ph;
     if (identified !== undefined) ph.identify(identified);
+    reexpose();
   }
 
   function saveRecord(session: ReturnType<typeof sessionFor>) {
@@ -490,6 +517,15 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     describe(props) {
       facts = { ...facts, ...props };
     },
+    expose(assignment) {
+      const parsed = parseAssignment(assignment);
+      if (!on || parsed === undefined || (parsed.source !== "id" && parsed.source !== "page") || exposed.has(parsed.key)) return;
+      exposed.set(parsed.key, parsed.variant);
+      api.describe({ [`$feature/${parsed.key}`]: parsed.variant });
+      const props: Props = { $feature_flag: parsed.key, $feature_flag_response: parsed.variant };
+      if (client) send("$feature_flag_called", props);
+      else if (queue.length < 50) queue.push(["$feature_flag_called", props]);
+    },
     identify(account, person = {}) {
       const id = accountId(account);
       if (id === undefined || policy?.analytics !== "persistent" || !client) return false;
@@ -553,6 +589,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   if (document.readyState === "complete") idle();
   else window.addEventListener("load", idle, { once: true });
   if (linked !== undefined) say(linked.analytics === "no" ? words.off : linked.ads === "no" ? words.adsOff : words.on);
+  for (const assignment of heldExperiments().assignments) api.expose(assignment);
   return api;
 }
 

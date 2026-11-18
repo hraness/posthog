@@ -1,6 +1,6 @@
 {
   "name": "@hraness/analytics",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "One PostHog analytics standard for websites, docs, web apps, Workers, CLIs and Mac apps: a region policy, consent banner, first-touch attribution, Meta Pixel and Conversions API gates, server capture and opt-out CLI telemetry.",
   "license": "MIT",
   "type": "module",
@@ -52,6 +52,11 @@
       "import": "./dist/browser.js",
       "default": "./dist/browser.js"
     },
+    "./experiment": {
+      "types": "./src/experiment.ts",
+      "import": "./dist/experiment.js",
+      "default": "./dist/experiment.js"
+    },
     "./meta": {
       "types": "./src/meta.ts",
       "import": "./dist/meta.js",
@@ -94,11 +99,13 @@
     "test": "bun test ./src",
     "test:property": "bun test ./src/*.property.test.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "check:code": "bun run check:portfolio-inventory && bun run check:product-contract && bun run check:public-boundary && bun run check:swift-policy && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package",
+    "check:code": "bun run check:portfolio-inventory && bun run check:product-contract && bun run check:public-boundary && bun run check:swift-policy && bun run check:experiment-source && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package",
     "check": "bun run check:code && bun run kb:check",
     "prepack": "bun run check",
     "check:swift-policy": "bun run ./scripts/generate-swift-policy.ts --check",
-    "swift:policy": "bun run ./scripts/generate-swift-policy.ts"
+    "swift:policy": "bun run ./scripts/generate-swift-policy.ts",
+    "check:experiment-source": "bun run ./scripts/generate-experiment-source.ts --check",
+    "experiment:source": "bun run ./scripts/generate-experiment-source.ts"
   },
   "dependencies": {
     "posthog-js": "1.449.1"

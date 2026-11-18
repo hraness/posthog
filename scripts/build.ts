@@ -9,6 +9,7 @@ const groups: readonly BuildGroup[] = [
   { entrypoints: ["src/events.ts"], target: "browser" },
   { entrypoints: ["src/attribution.ts"], target: "browser" },
   { entrypoints: ["src/browser.ts"], target: "browser" },
+  { entrypoints: ["src/experiment.ts"], target: "browser" },
   { entrypoints: ["src/meta.ts"], target: "browser" },
   { entrypoints: ["src/server.ts"], target: "browser" },
   { entrypoints: ["src/cli.ts"], target: "node" },
