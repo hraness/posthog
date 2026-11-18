@@ -200,7 +200,7 @@ How a variant is chosen:
 `createAnalytics` reports every assignment made on the page before it started. Call `analytics.expose(assignment)`
 for one made later. Each experiment is reported once per page: `$feature/<key>` is added to every later event, and one
 `$feature_flag_called` event carries `$feature_flag` (the key) and `$feature_flag_response` (the variant). After a
-European yes or `reset()` the visitor has a new distinct ID, and the client sends the exposure again under it. That event
+European yes the visitor has a new distinct ID, and the client sends the exposure again under it. That event
 is PostHog's default exposure, so create the experiment in PostHog with the same key and variant names, the first
 variant named `control`, and leave the exposure criteria at their default. The package never asks PostHog to evaluate
 the experiment's flag.

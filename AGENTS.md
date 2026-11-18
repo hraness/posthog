@@ -10,7 +10,7 @@
 - `src/policy.ts` owns the region table and policy every surface reads; `scripts/generate-swift-policy.ts` copies it into `swift/`.
 - `src/events.ts` and `src/attribution.ts` define the shared event vocabulary, channels, first touch, and cleaning, with no provider import.
 - `src/browser.ts` and `src/browser-config.ts` own the PostHog.js client, presets, consent banner, and identity.
-- `src/experiment.ts` owns local A/B assignment that runs before the client; the client reports exposures.
+- `src/experiment.ts` and `src/experiment-pick.ts` own local A/B assignment that runs before the client; the client reports exposures. `scripts/generate-experiment-source.ts` copies `pick` into `src/experiment-source.ts` for the inline script.
 - `src/meta.ts` owns the Meta Pixel and Conversions API, gated by the policy.
 - `src/server.ts` owns the region endpoint, server capture, billing events, and the app and CLI wire endpoint, using Web APIs only.
 - `src/cli.ts` owns opt-out CLI telemetry.

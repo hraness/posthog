@@ -99,11 +99,13 @@
     "test": "bun test ./src",
     "test:property": "bun test ./src/*.property.test.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "check:code": "bun run check:portfolio-inventory && bun run check:product-contract && bun run check:public-boundary && bun run check:swift-policy && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package",
+    "check:code": "bun run check:portfolio-inventory && bun run check:product-contract && bun run check:public-boundary && bun run check:swift-policy && bun run check:experiment-source && bun run lint && bun run typecheck && bun run build && bun run check:boundaries && bun run test && bun run test:property && bun run test:package",
     "check": "bun run check:code && bun run kb:check",
     "prepack": "bun run check",
     "check:swift-policy": "bun run ./scripts/generate-swift-policy.ts --check",
-    "swift:policy": "bun run ./scripts/generate-swift-policy.ts"
+    "swift:policy": "bun run ./scripts/generate-swift-policy.ts",
+    "check:experiment-source": "bun run ./scripts/generate-experiment-source.ts --check",
+    "experiment:source": "bun run ./scripts/generate-experiment-source.ts"
   },
   "dependencies": {
     "posthog-js": "1.449.1"

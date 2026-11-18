@@ -95,6 +95,19 @@ describe("experiment assignment", () => {
     expect(assign(HEADER, SITE).source).toBe("id");
   });
 
+  test("an analytics no kept only for the session also leaves the stored ID unused", () => {
+    page({ cookies: { "example-id": ID } });
+    setGlobal("sessionStorage", { getItem: (key: string) => (key === "example-choice" ? "a=no" : null) });
+    expect(assign(HEADER, SITE).source).toBe("page");
+  });
+
+  test("without crypto.randomUUID the page ID is still a UUID the client can adopt", () => {
+    page();
+    setGlobal("crypto", {});
+    assign(HEADER, SITE);
+    expect(heldExperiments().id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+  });
+
   test("blocked storage still assigns", () => {
     page({ blocked: true });
     expect(assign(HEADER, SITE).source).toBe("page");

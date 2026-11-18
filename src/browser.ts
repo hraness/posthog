@@ -204,7 +204,10 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   const counts = new Map<string, number>();
   // Experiment key to variant, reported on this page.
   const exposed = new Map<string, string>();
-  /** Reports each exposure again under a new distinct ID (an EU yes, a sign-out), so later events still count. */
+  /**
+   * Reports each exposure again under the persistent ID an EU yes starts, so later events still count. That ID is the
+   * one the page assigned with. A sign-out's new ID is not: it may hash to another variant, so it is not reported.
+   */
   const reexpose = () => {
     for (const [key, variant] of exposed) send("$feature_flag_called", { $feature_flag: key, $feature_flag_response: variant });
   };
@@ -539,7 +542,6 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       distinct = crypto.randomUUID();
       writeCookie(keys.id, distinct);
       saveRecord(sessionRecord);
-      reexpose();
     },
     choose(scope, choice) {
       const before = storedChoices();
