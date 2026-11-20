@@ -15,6 +15,7 @@
     "simple-git": "4.0.1",
     "@simple-git/argv-parser": "2.0.1",
     "@modelcontextprotocol/sdk": "1.32.0",
-    "zod": "4.6.6"
+    "zod": "4.6.6",
+    "@hono/node-server": "2.1.3"
   }
 }
