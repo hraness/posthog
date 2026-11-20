@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: hraness-cf
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,7 +41,7 @@ jobs:
         run: node --input-type=module -e 'await Promise.all(["@hraness/analytics", "@hraness/analytics/policy", "@hraness/analytics/events", "@hraness/analytics/attribution", "@hraness/analytics/browser", "@hraness/analytics/meta", "@hraness/analytics/server", "@hraness/analytics/cli"].map((specifier) => import(specifier)))'
 
   kb:
-    runs-on: ubuntu-latest
+    runs-on: hraness-cf
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,7 +65,7 @@ jobs:
     name: Required
     if: always()
     needs: [check, kb, swift]
-    runs-on: ubuntu-latest
+    runs-on: hraness-cf
     timeout-minutes: 5
     steps:
       - name: Require every blocking job
