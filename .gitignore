@@ -4,3 +4,6 @@ node_modules/
 *.tsbuildinfo
 .build/
 .swiftpm/
+
+# Admitted public Wordcell check archive and per-run extraction.
+.github/wordcell/.cache/
