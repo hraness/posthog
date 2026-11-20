@@ -16,7 +16,7 @@ if (!(args[0] === "check" || args[0] === "agents" && args[1] === "check")) {
 const cache = join(root, ".cache");
 mkdirSync(cache, { recursive: true });
 const archive = join(cache, digest + ".tgz");
-const verify = (bytes) => {
+const verify = (bytes: Uint8Array) => {
   if (bytes.length > 16 * 1024 * 1024 || createHash("sha256").update(bytes).digest("hex") !== digest) {
     throw new Error("The published Wordcell archive does not match its admitted SHA-256.");
   }
@@ -24,8 +24,9 @@ const verify = (bytes) => {
 if (!existsSync(archive)) {
   const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   if (!response.ok) throw new Error("The published Wordcell archive is unavailable.");
-  const chunks = [];
+  const chunks: Uint8Array[] = [];
   let total = 0;
+  if (!response.body) throw new Error("The published Wordcell response has no body.");
   for await (const chunk of response.body) {
     total += chunk.length;
     if (total > 16 * 1024 * 1024) throw new Error("The published Wordcell archive exceeds its size limit.");
@@ -58,8 +59,16 @@ with tarfile.open(sys.argv[1]) as archive:
         target.write_bytes(archive.extractfile(member).read())
 `, archive, source], { encoding: "utf8" });
   if (extract.error || extract.status !== 0) throw new Error("The admitted Wordcell payload could not be extracted safely.");
-  const { runExecutable } = await import(pathToFileURL(join(source, "dist/cli.js")).href);
-  process.exitCode = await runExecutable(args);
+  const published: unknown = await import(pathToFileURL(join(source, "dist/cli.js")).href);
+  if (typeof published !== "object" || published === null || !("runExecutable" in published) || typeof published.runExecutable !== "function") {
+    throw new Error("The admitted Wordcell archive has no executable API.");
+  }
+  const runExecutable = published.runExecutable as (args: string[]) => unknown;
+  const status: unknown = await runExecutable(args);
+  if (typeof status !== "number" || !Number.isInteger(status) || status < 0 || status > 255) {
+    throw new Error("The published Wordcell check returned an invalid exit status.");
+  }
+  process.exitCode = status;
 } finally {
   rmSync(source, { recursive: true, force: true });
 }
