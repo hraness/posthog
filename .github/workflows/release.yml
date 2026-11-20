@@ -15,7 +15,7 @@ concurrency:
 jobs:
   verify:
     name: Verify
-    runs-on: ubuntu-latest
+    runs-on: hraness-cf
     timeout-minutes: 30
     outputs:
       verified_tag: ${{ steps.identity.outputs.tag }}
@@ -84,7 +84,7 @@ jobs:
     needs: verify
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    runs-on: hraness-cf
     timeout-minutes: 5
     env:
       GH_REPO: ${{ github.repository }}
