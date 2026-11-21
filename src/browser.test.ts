@@ -176,9 +176,7 @@ function page(options: PageOptions) {
     fetched.push(address);
     return Promise.resolve(new Response(JSON.stringify({ country: null, region_group: "eu", gpc: false, policy: {} })));
   });
-  const realFormat = Intl.DateTimeFormat;
   setGlobal("Intl", { ...Intl, DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: options.zone }) }) });
-  void realFormat;
   return { jar, cleared, fetched, body, domLoaded, location, history, local: local.map, session: session.map };
 }
 

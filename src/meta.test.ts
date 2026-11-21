@@ -41,9 +41,9 @@ function fakePage(href = "https://example.com/") {
         if (/max-age=0\b/u.test(line)) jar.delete(name.trim());
         else jar.set(name.trim(), value);
       },
-      createElement: () => ({ async: false, src: "" }) as never,
-      head: { append: (script: { src: string; async: boolean; fetchPriority?: string }) => void scripts.push(script) } as never,
-    } as Page["document"],
+      createElement: () => ({ async: false, src: "" }),
+      head: { append: (script: { src: string; async: boolean; fetchPriority?: string }) => void scripts.push(script) },
+    } as unknown as Page["document"],
     window: {},
     location: { href, hostname: "example.com" },
     now: () => 1763200000000,
