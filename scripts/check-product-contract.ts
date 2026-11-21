@@ -120,11 +120,27 @@ if (packageComponent.version !== packageVersion) {
 
 requireText(releaseWorkflow, 'gh release create "$GITHUB_REF_NAME"', "release workflow");
 requireText(releaseWorkflow, ".isImmutable", "release workflow");
+
+const workflow = record(Bun.YAML.parse(releaseWorkflow), "release workflow");
+const jobs = record(workflow.jobs, "release workflow jobs");
+for (const [job, action] of [
+  ["verify", "actions/upload-artifact"],
+  ["publish", "actions/download-artifact"],
+] as const) {
+  const label = `release workflow jobs.${job}`;
+  const steps = arrayField(record(jobs[job], label), "steps", label);
+  const prefix = `${action}@`;
+  const refs = steps
+    .map((step, index) => record(step, `${label}.steps[${String(index)}]`).uses)
+    .filter((uses): uses is string => typeof uses === "string" && uses.startsWith(prefix));
+  if (refs.length === 0 || refs.some((ref) => !/^[0-9a-f]{40}$/u.test(ref.slice(prefix.length)))) {
+    throw new Error(`${label} must pin ${action} to a full commit SHA`);
+  }
+}
+
 for (const required of [
   "bun pm pack --ignore-scripts --filename",
   `${tarballStem}-\${GITHUB_REF_NAME#v}.tgz`,
-  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
   "sha256sum --check SHA256SUMS",
   '"release/$package_file" release/SHA256SUMS',
   'gh release edit "$GITHUB_REF_NAME" --draft=false --latest',
