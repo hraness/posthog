@@ -391,13 +391,14 @@ var LINKISH = /url|referrer|href|pathname/iu;
 var CAMPAIGN_FIELD = /^(?:\$(?:initial_|session_entry_)?)?utm_(source|medium|campaign|term|content)$/iu;
 var REF_FIELD = /^(?:(?:\$(?:initial_|session_entry_)?)?(?:ref|via)|(?:first|last)_ref)$/iu;
 var CLICK_FIELD = /^(?:\$(?:initial_|session_entry_)?)?(gclid|gclsrc|dclid|fbclid|msclkid|twclid|ttclid|li_fat_id|igshid|wbraid|gbraid|gad_source|mc_cid|mc_eid)$/iu;
+var SEARCH_KEYWORD_FIELD = /^(?:\$(?:initial_|session_entry_)?)?ph_keyword$/iu;
 var EMAIL = /[^\s@<>()"',;:]{1,64}@[^\s@<>()"',;:]{1,255}\.[a-z]{2,}/giu;
 var plain = (value) => typeof value === "object" && value !== null && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 function cleanChain(chain, routes) {
   return cleanText(chain.replace(/((?:attr__)?href=")([^"]*)"/gu, (_whole, name, href) => `${name}${cleanUrl(href, routes)}"`), routes).replace(EMAIL, "[email]");
 }
 function cleanValue(key, value, options, depth) {
-  if (CLICK_FIELD.test(key))
+  if (CLICK_FIELD.test(key) || SEARCH_KEYWORD_FIELD.test(key))
     return;
   if (key === "first_source" || CAMPAIGN_FIELD.test(key))
     return campaignLabel(value);
@@ -755,4 +756,4 @@ export {
   ARRIVAL_GLOBAL
 };
 
-//# debugId=E8B3127D8C86F8C564756E2164756E21
+//# debugId=E7C2866F5DA622A864756E2164756E21

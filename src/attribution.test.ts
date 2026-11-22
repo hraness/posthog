@@ -210,18 +210,21 @@ describe("what never leaves", () => {
     expect(routePattern("/x/y/z", ["/x/:id"])).toBe("/x/y/z");
   });
 
-  test("SDK referrers, campaigns and ad IDs cannot bypass the allowlist", () => {
+  test("SDK referrers, search keywords, campaigns and ad IDs cannot bypass the allowlist", () => {
     const timestamp = new Date("2026-11-14T12:00:00Z");
     const sent = cleanProps({
       $referrer: "https://chatgpt.com/c/PRIVATE_CHAT?token=PRIVATE_TOKEN#PRIVATE_FRAGMENT",
       $current_url: "https://example.com/about?utm_source=person%40example.com&utm_campaign=launch&gclid=PRIVATE_AD&query=PRIVATE_QUERY",
       $session_entry_utm_source: "person@example.com",
       $session_entry_gclid: "PRIVATE_SESSION_AD",
+      ph_keyword: "PRIVATE_KEYWORD",
+      $session_entry_ph_keyword: "PRIVATE_SESSION_KEYWORD",
+      $search_engine: "google",
       utm_source: "person@example.com",
       gclid: "PRIVATE_AD",
       msclkid: "PRIVATE_AD",
       first_source: "https://example.com/PRIVATE_SOURCE",
-      $set_once: { $initial_referrer: "https://search.example/private/PRIVATE_SEARCH", $initial_utm_source: "person@example.com", $initial_fbclid: "PRIVATE_CLICK" },
+      $set_once: { $initial_referrer: "https://search.example/private/PRIVATE_SEARCH", $initial_utm_source: "person@example.com", $initial_fbclid: "PRIVATE_CLICK", $initial_ph_keyword: "PRIVATE_INITIAL_KEYWORD" },
       timestamp,
     });
     expect(sent.$referrer).toBe("https://chatgpt.com/");
@@ -230,6 +233,7 @@ describe("what never leaves", () => {
     expect(sent.utm_source).toBeUndefined();
     expect(sent.first_source).toBeUndefined();
     expect(sent.gclid).toBeUndefined();
+    expect(sent.$search_engine).toBe("google");
     expect(JSON.stringify(sent)).not.toMatch(/PRIVATE|person%40|person@/u);
     expect(sent.timestamp).toBe(timestamp);
   });

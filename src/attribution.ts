@@ -482,6 +482,7 @@ const LINKISH = /url|referrer|href|pathname/iu;
 const CAMPAIGN_FIELD = /^(?:\$(?:initial_|session_entry_)?)?utm_(source|medium|campaign|term|content)$/iu;
 const REF_FIELD = /^(?:(?:\$(?:initial_|session_entry_)?)?(?:ref|via)|(?:first|last)_ref)$/iu;
 const CLICK_FIELD = /^(?:\$(?:initial_|session_entry_)?)?(gclid|gclsrc|dclid|fbclid|msclkid|twclid|ttclid|li_fat_id|igshid|wbraid|gbraid|gad_source|mc_cid|mc_eid)$/iu;
+const SEARCH_KEYWORD_FIELD = /^(?:\$(?:initial_|session_entry_)?)?ph_keyword$/iu;
 const EMAIL = /[^\s@<>()"',;:]{1,64}@[^\s@<>()"',;:]{1,255}\.[a-z]{2,}/giu;
 
 const plain = (value: unknown): value is Record<string, unknown> =>
@@ -495,7 +496,7 @@ function cleanChain(chain: string, routes: readonly RoutePattern[]): string {
 }
 
 function cleanValue(key: string, value: unknown, options: CleanOptions, depth: number): unknown {
-  if (CLICK_FIELD.test(key)) return undefined;
+  if (CLICK_FIELD.test(key) || SEARCH_KEYWORD_FIELD.test(key)) return undefined;
   if (key === "first_source" || CAMPAIGN_FIELD.test(key)) return campaignLabel(value);
   if (REF_FIELD.test(key)) return refLabel(value);
   const routes = options.routes ?? [];

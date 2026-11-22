@@ -52,7 +52,7 @@ This repository does not publish the package to npm. Pin the immutable GitHub Re
 ```json
 {
   "dependencies": {
-    "@hraness/analytics": "https://github.com/hraness/posthog/releases/download/v1.2.1/hraness-analytics-1.2.1.tgz"
+    "@hraness/analytics": "https://github.com/hraness/posthog/releases/download/v1.2.2/hraness-analytics-1.2.2.tgz"
   }
 }
 ```
@@ -60,10 +60,10 @@ This repository does not publish the package to npm. Pin the immutable GitHub Re
 Each release also carries a `SHA256SUMS` file. The package needs Node 24 or later on the server and pins
 `posthog-js` 1.449.1 for the browser.
 
-For a Mac or iOS app, add the repository as a Swift package from the `v1.2.1` tag:
+For a Mac or iOS app, add the repository as a Swift package from the `v1.2.2` tag:
 
 ```swift
-.package(url: "https://github.com/hraness/posthog.git", from: "1.2.1")
+.package(url: "https://github.com/hraness/posthog.git", from: "1.2.2")
 ```
 
 The Swift package ([`Package.swift`](Package.swift)) depends only on Foundation, plus AppKit for the consent sheet.

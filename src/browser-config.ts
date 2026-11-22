@@ -148,7 +148,7 @@ export function posthogOptions(input: Readonly<{
     rageclick: caps.heatmaps,
     capture_dead_clicks: caps.heatmaps,
     capture_heatmaps: caps.heatmaps,
-    capture_pageview: "history_change",
+    capture_pageview: trafficOnly ? true : "history_change",
     capture_pageleave: !trafficOnly,
     capture_exceptions: !trafficOnly,
     capture_performance: trafficOnly ? false : { web_vitals: true, network_timing: false, web_vitals_attribution: caps.vitalsAttribution },
