@@ -7,7 +7,7 @@ import type { CleanOptions, ChannelOptions, RoutePattern } from "./attribution.j
 import type { Choice, Choices, RegionPolicy } from "./policy.js";
 
 /** Which surface a page belongs to (section 3.3 of the standard). */
-export type Preset = "marketing" | "docs" | "app";
+export type Preset = "marketing" | "docs" | "app" | "traffic";
 
 export type ConsentWords = Readonly<{
   /** The European question (one choice covering analytics, recordings and ads). */
@@ -45,7 +45,7 @@ export type BrowserConfig = Readonly<{
   /** The `site_id` super property. */
   siteId: string;
   preset: Preset;
-  /** The `surface` super property. Default `site` for marketing, `docs` for docs, `web_app` for app. */
+  /** The `surface` super property. Default `site` for marketing and traffic, `docs` for docs, `web_app` for app. */
   surface?: string;
   /** The `page_kind` super property. */
   pageKind?: string;
@@ -94,6 +94,7 @@ export type Capabilities = Readonly<{
 
 /** What this page may turn on: the policy, narrowed by the preset and private paths. */
 export function capabilities(policy: RegionPolicy, preset: Preset, privatePath: boolean): Capabilities {
+  if (preset === "traffic") return { autocapture: false, heatmaps: false, replay: false, vitalsAttribution: false };
   const publicPage = preset !== "app" && !privatePath;
   return {
     autocapture: policy.autocapture,
@@ -121,6 +122,7 @@ export function posthogOptions(input: Readonly<{
   const rate = config.replaySampleRate;
   const sampleRate = typeof rate === "number" && Number.isFinite(rate) ? Math.min(1, Math.max(0, rate)) : undefined;
   const app = config.preset === "app";
+  const trafficOnly = config.preset === "traffic";
   return {
     api_host: config.apiHost ?? "/ph",
     ui_host: config.uiHost ?? "https://us.posthog.com",
@@ -147,9 +149,9 @@ export function posthogOptions(input: Readonly<{
     capture_dead_clicks: caps.heatmaps,
     capture_heatmaps: caps.heatmaps,
     capture_pageview: "history_change",
-    capture_pageleave: true,
-    capture_exceptions: true,
-    capture_performance: { web_vitals: true, network_timing: false, web_vitals_attribution: caps.vitalsAttribution },
+    capture_pageleave: !trafficOnly,
+    capture_exceptions: !trafficOnly,
+    capture_performance: trafficOnly ? false : { web_vitals: true, network_timing: false, web_vitals_attribution: caps.vitalsAttribution },
     disable_session_recording: !caps.replay,
     session_recording: {
       maskAllInputs: true,

@@ -168,12 +168,13 @@ function writeLocal(key: string, value: string | undefined) {
 /** Starts the client for this page. Returns a no-op client where nothing may run. */
 export function createAnalytics<Extra extends string = never>(config: BrowserConfig): Analytics<Extra> {
   if (typeof window === "undefined" || typeof document === "undefined") return OFF;
+  const trafficOnly = config.preset === "traffic";
   const prefix = config.storagePrefix ?? config.siteId;
   const keys = { id: `${prefix}-id`, choice: `${prefix}-choice`, touch: `${prefix}-touch` };
   const words: ConsentWords = config.words ?? ENGLISH;
 
   // The privacy page's links work even where nothing else runs, so a no given early still holds.
-  const linked = linkChoice(location.search);
+  const linked = trafficOnly ? undefined : linkChoice(location.search);
   if (linked !== undefined) {
     store(mergeChoices(storedChoices(), { ...linked, at: Date.now() }));
     const rest = new URLSearchParams(location.search);
@@ -193,6 +194,15 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   // The snapshot taken at load, when this module was imported later; else the address as it is now.
   const seen = snapshotArrival() ?? { path: location.pathname, search: location.search, referrer: document.referrer };
   const arrival: Arrival = arrivalOf(seen.path, seen.search, seen.referrer, config.contentParams ?? [], routes);
+  // Web Analytics reads the entry pageview's top-level referrer. Reuse the cleaned origin without enabling SDK referrer storage.
+  const referringDomain = arrival.referrer === "" ? "" : new URL(arrival.referrer).hostname;
+  const ownReferrer = (config.channel?.ownHosts ?? config.hosts).some((host) => referringDomain === host || referringDomain.endsWith(`.${host}`));
+  const tags = new URLSearchParams(arrival.search);
+  const searchAd = (tags.has("gclid") || tags.has("msclkid")) && !tags.has("utm_medium");
+  const pageviewAttribution = {
+    ...(referringDomain === "" || ownReferrer ? {} : { $referrer: arrival.referrer, $referring_domain: referringDomain }),
+    ...(searchAd ? { utm_medium: "cpc" } : {}),
+  };
   let on = true;
   let client: PostHogLike | undefined;
   let policy: RegionPolicy | undefined;
@@ -280,7 +290,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   }
 
   let country: string | null = null;
-  const currentPolicy = () => regionPolicy({ country, zone: zone(), gpc: gpc(), choices: storedChoices() });
+  const currentPolicy = () => regionPolicy({ country, zone: zone(), gpc: gpc(), choices: trafficOnly ? { analytics: "no" } : storedChoices() });
 
   function startAds() {
     if (adsStarted || policy?.ads !== true) return;
@@ -328,8 +338,8 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     const caps = capabilities(policy, config.preset, isPrivate(location.pathname));
     const [{ default: posthog }] = await Promise.all([
       import("posthog-js/dist/module.no-external.js"),
-      import("posthog-js/dist/exception-autocapture.js"),
-      caps.vitalsAttribution ? import("posthog-js/dist/web-vitals-with-attribution.js") : import("posthog-js/dist/web-vitals.js"),
+      trafficOnly ? Promise.resolve() : import("posthog-js/dist/exception-autocapture.js"),
+      trafficOnly ? Promise.resolve() : caps.vitalsAttribution ? import("posthog-js/dist/web-vitals-with-attribution.js") : import("posthog-js/dist/web-vitals.js"),
       caps.heatmaps ? import("posthog-js/dist/dead-clicks-autocapture.js") : Promise.resolve(),
       caps.replay ? import("posthog-js/dist/posthog-recorder.js") : Promise.resolve(),
     ]);
@@ -341,6 +351,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       ...posthogOptions({ config, policy, caps, distinctId: identified ?? distinct, identified: identified !== undefined, sessionId: session?.id }),
       before_send: (event: { event?: string; properties?: Record<string, unknown> } | null) => {
         if (event === null || !on || mine !== generation) return null;
+        if (trafficOnly && event.event !== "$pageview") return null;
         if (policy?.analytics === "persistent") touchSession(event.properties?.$session_id);
         if (event.event === "$exception" && ++errors > 5) return null;
         if (event.event !== undefined && ["$autocapture", "$rageclick", "$dead_click"].includes(event.event) && fromPrivateElement(event.properties)) return null;
@@ -348,7 +359,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
         if (kept === null) return null;
         const allowProps = config.clean?.allowProps;
         const cleaned = cleanEvent(
-          { ...kept, properties: { ...kept.properties, ...facts } },
+          { ...kept, properties: { ...kept.properties, ...facts, ...(event.event === "$pageview" ? pageviewAttribution : {}) } },
           allowProps === undefined ? { routes } : { routes, allowProps: [...allowProps, ...Object.keys(facts)] },
         );
         queueMicrotask(() => { tidy(event.event); });
@@ -366,11 +377,13 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
   async function load() {
     country = await region();
     policy = currentPolicy();
-    if (policy.analytics !== "persistent") forget();
-    else if (!policy.ads) adsOff();
+    if (!trafficOnly) {
+      if (policy.analytics !== "persistent") forget();
+      else if (!policy.ads) adsOff();
+    }
     base = {
       site_id: config.siteId,
-      surface: config.surface ?? (config.preset === "marketing" ? "site" : config.preset === "docs" ? "docs" : "web_app"),
+      surface: config.surface ?? (config.preset === "app" ? "web_app" : config.preset === "docs" ? "docs" : "site"),
       schema: SCHEMA,
       page_kind: config.pageKind,
       consent_mode: policy.analytics,
@@ -395,7 +408,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
     if (identified !== undefined) ph.identify(identified);
     for (const [event, props] of queue) send(event, props);
     queue = [];
-    watchNavigation();
+    if (!trafficOnly) watchNavigation();
     startAds();
     if (policy.ask !== "none") setTimeout(() => { ask(policy?.ask ?? "none"); }, config.askDelayMs ?? 2500);
   }
@@ -544,6 +557,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       saveRecord(sessionRecord);
     },
     choose(scope, choice) {
+      if (trafficOnly) return;
       const before = storedChoices();
       const next = scope === "all" ? { analytics: choice, ads: choice } : { ...before, ads: choice };
       store({ ...next, at: Date.now() });
@@ -560,6 +574,7 @@ export function createAnalytics<Extra extends string = never>(config: BrowserCon
       }
     },
     privacyChoices() {
+      if (trafficOnly) return;
       store({ ...storedChoices(), ads: "no", at: Date.now() });
       client?.stopSessionRecording();
       adsOff();

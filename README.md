@@ -52,7 +52,7 @@ This repository does not publish the package to npm. Pin the immutable GitHub Re
 ```json
 {
   "dependencies": {
-    "@hraness/analytics": "https://github.com/hraness/posthog/releases/download/v1.1.0/hraness-analytics-1.1.0.tgz"
+    "@hraness/analytics": "https://github.com/hraness/posthog/releases/download/v1.2.0/hraness-analytics-1.2.0.tgz"
   }
 }
 ```
@@ -60,10 +60,10 @@ This repository does not publish the package to npm. Pin the immutable GitHub Re
 Each release also carries a `SHA256SUMS` file. The package needs Node 24 or later on the server and pins
 `posthog-js` 1.449.1 for the browser.
 
-For a Mac or iOS app, add the repository as a Swift package from the `v1.1.0` tag:
+For a Mac or iOS app, add the repository as a Swift package from the `v1.2.0` tag:
 
 ```swift
-.package(url: "https://github.com/hraness/posthog.git", from: "1.1.0")
+.package(url: "https://github.com/hraness/posthog.git", from: "1.2.0")
 ```
 
 The Swift package ([`Package.swift`](Package.swift)) depends only on Foundation, plus AppKit for the consent sheet.
@@ -138,7 +138,7 @@ runs inside a native shell. Its methods:
 | `token` | required | The PostHog project's public token. Empty turns everything off. |
 | `hosts` | required | Hosts the client may run on, matched exactly. |
 | `siteId` | required | Sent as `site_id` on every event. |
-| `preset` | required | `marketing`, `docs` or `app`. The `app` preset never records or draws heatmaps, captures only clicks on `button`, `a` and `[data-ph]`, and masks all text. |
+| `preset` | required | `marketing`, `docs`, `app` or `traffic`. The `app` preset never records or draws heatmaps, captures only clicks on `button`, `a` and `[data-ph]`, and masks all text. The `traffic` preset counts pageviews without cookies or recordings. |
 | `apiHost` | `/ph` | Same-origin proxy path or URL for PostHog. |
 | `uiHost` | none | PostHog's app host, for toolbar links. |
 | `surface` | from the preset | Sent as `surface`. |
