@@ -57,6 +57,8 @@ jobs:
           fi
           printf 'tag=%s\n' "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
       - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install the frozen public Wordcell check dependencies
+        run: bun install --cwd .github/wordcell --frozen-lockfile --ignore-scripts
       - run: bun run check
       - name: Verify generated release files
         run: |
