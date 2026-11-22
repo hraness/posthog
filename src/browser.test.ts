@@ -239,6 +239,7 @@ describe("the browser client", () => {
       cookieless_mode: "always",
       autocapture: false,
       disable_session_recording: true,
+      capture_pageview: true,
       capture_pageleave: false,
       capture_exceptions: false,
       capture_performance: false,
