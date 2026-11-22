@@ -193,6 +193,69 @@ const latest = () => {
 };
 
 describe("the browser client", () => {
+  test.each([
+    ["America/New_York", "persistent"],
+    ["Europe/Berlin", "cookieless"],
+  ] as const)("the native pageview referrer is origin-only in %s", async (zone, consentMode) => {
+    page({ href: "https://example.com/", zone, referrer: "https://www.google.com/search?q=private#fragment" });
+    createAnalytics({ ...base, preset: "marketing", regionUrl: false });
+    await settle();
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    capture("$pageview", {});
+    expect(latest().options.save_referrer).toBe(false);
+    expect(latest().sent.at(-1)?.properties).toMatchObject({
+      consent_mode: consentMode,
+      channel: "search",
+      $referrer: "https://www.google.com/",
+      $referring_domain: "www.google.com",
+    });
+  });
+
+  test("a product's own referrer does not become a native acquisition source", async () => {
+    page({ href: "https://example.com/", zone: "America/New_York", referrer: "https://docs.example.com/previous" });
+    createAnalytics({ ...base, preset: "marketing", regionUrl: false });
+    await settle();
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    capture("$pageview", {});
+    expect(latest().sent.at(-1)?.properties).not.toHaveProperty("$referring_domain");
+  });
+
+  test("a search ad keeps its paid label without sending the click ID", async () => {
+    page({ href: "https://example.com/?gclid=private-click-id", zone: "America/New_York", referrer: "https://www.google.com/" });
+    createAnalytics({ ...base, preset: "marketing", regionUrl: false });
+    await settle();
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    capture("$pageview", { gclid: "private-click-id" });
+    expect(latest().sent.at(-1)?.properties).toMatchObject({ channel: "paid", utm_medium: "cpc" });
+    expect(JSON.stringify(latest().sent.at(-1))).not.toContain("private-click-id");
+  });
+
+  test("traffic only sends cookieless pageviews and leaves shared storage alone", async () => {
+    const tab = page({ href: "https://example.com/?analytics=on", zone: "America/New_York", cookies: ["_fbp=existing"] });
+    const analytics = createAnalytics({ ...base, preset: "traffic", regionUrl: false });
+    await settle();
+    const ph = latest();
+    expect(ph.options).toMatchObject({
+      cookieless_mode: "always",
+      autocapture: false,
+      disable_session_recording: true,
+      capture_pageleave: false,
+      capture_exceptions: false,
+      capture_performance: false,
+    });
+    const capture = (root as { capture: (event: string, props: Record<string, unknown>) => void }).capture;
+    capture("cta clicked", {});
+    expect(ph.sent.at(-1)).toBeNull();
+    capture("$pageview", {});
+    expect(ph.sent.at(-1)?.properties).toMatchObject({ consent_mode: "cookieless", surface: "site" });
+    analytics.choose("all", "yes");
+    analytics.privacyChoices();
+    expect([...tab.jar]).toEqual([["_fbp", "existing"]]);
+    expect(tab.local.size).toBe(0);
+    expect(tab.session.size).toBe(0);
+    expect(tab.body.children).toEqual([]);
+  });
+
   test("a literal private path is private, as are patterns", async () => {
     const tab = page({ href: "https://example.com/", zone: "America/New_York", regionUrl: false });
     createAnalytics({ ...base, preset: "marketing", regionUrl: false, privatePaths: ["/account", "/settings/billing", "/library/*", "/s/:id"] });

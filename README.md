@@ -138,7 +138,7 @@ runs inside a native shell. Its methods:
 | `token` | required | The PostHog project's public token. Empty turns everything off. |
 | `hosts` | required | Hosts the client may run on, matched exactly. |
 | `siteId` | required | Sent as `site_id` on every event. |
-| `preset` | required | `marketing`, `docs` or `app`. The `app` preset never records or draws heatmaps, captures only clicks on `button`, `a` and `[data-ph]`, and masks all text. |
+| `preset` | required | `marketing`, `docs`, `app` or `traffic`. The `app` preset never records or draws heatmaps, captures only clicks on `button`, `a` and `[data-ph]`, and masks all text. The `traffic` preset counts pageviews without cookies or recordings. |
 | `apiHost` | `/ph` | Same-origin proxy path or URL for PostHog. |
 | `uiHost` | none | PostHog's app host, for toolbar links. |
 | `surface` | from the preset | Sent as `surface`. |

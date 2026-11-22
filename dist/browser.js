@@ -481,6 +481,8 @@ var ENGLISH = {
 };
 var DEFAULT_PRIVATE_SELECTOR = "[data-private], .ph-no-capture";
 function capabilities(policy, preset, privatePath) {
+  if (preset === "traffic")
+    return { autocapture: false, heatmaps: false, replay: false, vitalsAttribution: false };
   const publicPage = preset !== "app" && !privatePath;
   return {
     autocapture: policy.autocapture,
@@ -496,6 +498,7 @@ function posthogOptions(input) {
   const rate = config.replaySampleRate;
   const sampleRate = typeof rate === "number" && Number.isFinite(rate) ? Math.min(1, Math.max(0, rate)) : undefined;
   const app = config.preset === "app";
+  const trafficOnly = config.preset === "traffic";
   return {
     api_host: config.apiHost ?? "/ph",
     ui_host: config.uiHost ?? "https://us.posthog.com",
@@ -516,9 +519,9 @@ function posthogOptions(input) {
     capture_dead_clicks: caps.heatmaps,
     capture_heatmaps: caps.heatmaps,
     capture_pageview: "history_change",
-    capture_pageleave: true,
-    capture_exceptions: true,
-    capture_performance: { web_vitals: true, network_timing: false, web_vitals_attribution: caps.vitalsAttribution },
+    capture_pageleave: !trafficOnly,
+    capture_exceptions: !trafficOnly,
+    capture_performance: trafficOnly ? false : { web_vitals: true, network_timing: false, web_vitals_attribution: caps.vitalsAttribution },
     disable_session_recording: !caps.replay,
     session_recording: {
       maskAllInputs: true,
@@ -1027,10 +1030,11 @@ function writeLocal(key, value) {
 function createAnalytics(config) {
   if (typeof window === "undefined" || typeof document === "undefined")
     return OFF;
+  const trafficOnly = config.preset === "traffic";
   const prefix = config.storagePrefix ?? config.siteId;
   const keys = { id: `${prefix}-id`, choice: `${prefix}-choice`, touch: `${prefix}-touch` };
   const words = config.words ?? ENGLISH;
-  const linked = linkChoice(location.search);
+  const linked = trafficOnly ? undefined : linkChoice(location.search);
   if (linked !== undefined) {
     store(mergeChoices(storedChoices(), { ...linked, at: Date.now() }));
     const rest = new URLSearchParams(location.search);
@@ -1048,6 +1052,14 @@ function createAnalytics(config) {
   const routes = [...config.clean?.routes ?? [], ...config.privatePaths ?? []];
   const seen = snapshotArrival() ?? { path: location.pathname, search: location.search, referrer: document.referrer };
   const arrival = arrivalOf(seen.path, seen.search, seen.referrer, config.contentParams ?? [], routes);
+  const referringDomain = arrival.referrer === "" ? "" : new URL(arrival.referrer).hostname;
+  const ownReferrer = (config.channel?.ownHosts ?? config.hosts).some((host) => referringDomain === host || referringDomain.endsWith(`.${host}`));
+  const tags = new URLSearchParams(arrival.search);
+  const searchAd = (tags.has("gclid") || tags.has("msclkid")) && !tags.has("utm_medium");
+  const pageviewAttribution = {
+    ...referringDomain === "" || ownReferrer ? {} : { $referrer: arrival.referrer, $referring_domain: referringDomain },
+    ...searchAd ? { utm_medium: "cpc" } : {}
+  };
   let on = true;
   let client;
   let policy;
@@ -1121,7 +1133,7 @@ function createAnalytics(config) {
     }
   }
   let country = null;
-  const currentPolicy = () => regionPolicy({ country, zone: zone(), gpc: gpc(), choices: storedChoices() });
+  const currentPolicy = () => regionPolicy({ country, zone: zone(), gpc: gpc(), choices: trafficOnly ? { analytics: "no" } : storedChoices() });
   function startAds() {
     if (adsStarted || policy?.ads !== true)
       return;
@@ -1164,8 +1176,8 @@ function createAnalytics(config) {
     const caps = capabilities(policy, config.preset, isPrivate(location.pathname));
     const [{ default: posthog }] = await Promise.all([
       import("posthog-js/dist/module.no-external.js"),
-      import("posthog-js/dist/exception-autocapture.js"),
-      caps.vitalsAttribution ? import("posthog-js/dist/web-vitals-with-attribution.js") : import("posthog-js/dist/web-vitals.js"),
+      trafficOnly ? Promise.resolve() : import("posthog-js/dist/exception-autocapture.js"),
+      trafficOnly ? Promise.resolve() : caps.vitalsAttribution ? import("posthog-js/dist/web-vitals-with-attribution.js") : import("posthog-js/dist/web-vitals.js"),
       caps.heatmaps ? import("posthog-js/dist/dead-clicks-autocapture.js") : Promise.resolve(),
       caps.replay ? import("posthog-js/dist/posthog-recorder.js") : Promise.resolve()
     ]);
@@ -1178,6 +1190,8 @@ function createAnalytics(config) {
       before_send: (event) => {
         if (event === null || !on || mine !== generation)
           return null;
+        if (trafficOnly && event.event !== "$pageview")
+          return null;
         if (policy?.analytics === "persistent")
           touchSession(event.properties?.$session_id);
         if (event.event === "$exception" && ++errors > 5)
@@ -1188,7 +1202,7 @@ function createAnalytics(config) {
         if (kept === null)
           return null;
         const allowProps = config.clean?.allowProps;
-        const cleaned = cleanEvent({ ...kept, properties: { ...kept.properties, ...facts } }, allowProps === undefined ? { routes } : { routes, allowProps: [...allowProps, ...Object.keys(facts)] });
+        const cleaned = cleanEvent({ ...kept, properties: { ...kept.properties, ...facts, ...event.event === "$pageview" ? pageviewAttribution : {} } }, allowProps === undefined ? { routes } : { routes, allowProps: [...allowProps, ...Object.keys(facts)] });
         queueMicrotask(() => {
           tidy(event.event);
         });
@@ -1205,13 +1219,15 @@ function createAnalytics(config) {
   async function load() {
     country = await region();
     policy = currentPolicy();
-    if (policy.analytics !== "persistent")
-      forget();
-    else if (!policy.ads)
-      adsOff();
+    if (!trafficOnly) {
+      if (policy.analytics !== "persistent")
+        forget();
+      else if (!policy.ads)
+        adsOff();
+    }
     base = {
       site_id: config.siteId,
-      surface: config.surface ?? (config.preset === "marketing" ? "site" : config.preset === "docs" ? "docs" : "web_app"),
+      surface: config.surface ?? (config.preset === "app" ? "web_app" : config.preset === "docs" ? "docs" : "site"),
       schema: SCHEMA,
       page_kind: config.pageKind,
       consent_mode: policy.analytics,
@@ -1239,7 +1255,8 @@ function createAnalytics(config) {
     for (const [event, props] of queue)
       send(event, props);
     queue = [];
-    watchNavigation();
+    if (!trafficOnly)
+      watchNavigation();
     startAds();
     if (policy.ask !== "none")
       setTimeout(() => {
@@ -1406,6 +1423,8 @@ function createAnalytics(config) {
       saveRecord(sessionRecord);
     },
     choose(scope, choice) {
+      if (trafficOnly)
+        return;
       const before = storedChoices();
       const next = scope === "all" ? { analytics: choice, ads: choice } : { ...before, ads: choice };
       store({ ...next, at: Date.now() });
@@ -1427,6 +1446,8 @@ function createAnalytics(config) {
       }
     },
     privacyChoices() {
+      if (trafficOnly)
+        return;
       store({ ...storedChoices(), ads: "no", at: Date.now() });
       client?.stopSessionRecording();
       adsOff();
@@ -1499,4 +1520,4 @@ export {
   ARRIVAL_SCRIPT
 };
 
-//# debugId=CE06726DF1C6A5D764756E2164756E21
+//# debugId=25967A8D1008B39064756E2164756E21
