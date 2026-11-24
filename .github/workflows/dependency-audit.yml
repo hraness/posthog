@@ -82,7 +82,7 @@ concurrency:
 jobs:
   audit:
     name: Dependency audit
-    runs-on: hraness-cf
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
